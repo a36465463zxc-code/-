@@ -31,6 +31,7 @@ export default function App() {
   const [zoomMode, setZoomMode] = useState<'fit' | 'original'>('fit');
   const [colorBalanceRange, setColorBalanceRange] = useState<'shadows' | 'midtones' | 'highlights'>('midtones');
   const [availableLuts, setAvailableLuts] = useState<LUT3D[]>([]);
+  const [mobileView, setMobileView] = useState<'gallery' | 'preview' | 'adjust'>('preview');
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const originalCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -185,7 +186,7 @@ export default function App() {
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement('canvas');
-      const MAX_WIDTH = 1600;
+      const MAX_WIDTH = 2560;
       let width = img.width;
       let height = img.height;
       
@@ -479,19 +480,25 @@ export default function App() {
 
   return (
     <div 
-      className="flex h-screen bg-zinc-950 text-zinc-100 font-sans overflow-hidden"
+      className="flex flex-col lg:flex-row h-screen bg-zinc-950 text-zinc-100 font-sans overflow-hidden"
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
       {/* Left Sidebar: Image List */}
-      <div className="w-64 bg-zinc-900 border-r border-zinc-800 flex flex-col">
-        <div className="p-4 border-b border-zinc-800">
+      <div className={`
+        fixed inset-0 z-50 lg:relative lg:z-0 lg:flex lg:w-64 bg-zinc-900 border-r border-zinc-800 flex-col
+        ${mobileView === 'gallery' ? 'flex' : 'hidden lg:flex'}
+      `}>
+        <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
           <h1 className="text-lg font-semibold flex items-center gap-2">
             <ImageIcon className="w-5 h-5" />
             FilmLab Web
           </h1>
+          <button onClick={() => setMobileView('preview')} className="lg:hidden p-1 text-zinc-400 hover:text-zinc-100">
+            <X className="w-6 h-6" />
+          </button>
         </div>
         
         <div className="p-4 border-b border-zinc-800">
@@ -534,20 +541,29 @@ export default function App() {
 
       {/* Main Area */}
       <TransformWrapper
+        key={`${selectedId}-${selectedImage?.rotation}`}
         disabled={isCropping}
-        initialScale={1}
         minScale={0.1}
         maxScale={10}
         centerOnInit={true}
-        wheel={{ step: 0.1 }}
+        limitToBounds={true}
+        wheel={{ step: 0.1, smoothStep: 0.005 }}
+        panning={{ velocityDisabled: false }}
+        doubleClick={{ mode: 'reset' }}
       >
         {({ zoomIn, zoomOut, resetTransform }) => (
-          <div className="flex-1 flex flex-col bg-zinc-950 relative">
+          <div className="flex-1 flex flex-col bg-zinc-950 relative overflow-hidden">
             {/* Toolbar */}
-            <div className="h-14 border-b border-zinc-800 flex items-center justify-between px-6">
+            <div className="h-14 border-b border-zinc-800 flex items-center justify-between px-4 lg:px-6 shrink-0 z-10 bg-zinc-950">
               <div className="flex items-center gap-2">
+                <button 
+                  className="lg:hidden p-2 -ml-2 text-zinc-400 hover:text-zinc-100"
+                  onClick={() => setMobileView('gallery')}
+                >
+                  <ImageIcon className="w-5 h-5" />
+                </button>
                 {!isCropping && (
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1 lg:gap-2">
                     <button
                       onClick={() => setIsCropping(true)}
                       disabled={!selectedImage}
@@ -603,7 +619,7 @@ export default function App() {
                   </div>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 lg:gap-2">
                 {isCropping ? (
                   <>
                     <button
@@ -656,13 +672,19 @@ export default function App() {
                     >
                       <Download className="w-4 h-4" />
                     </button>
+                    <button 
+                      className="lg:hidden p-2 -mr-1 text-zinc-400 hover:text-zinc-100"
+                      onClick={() => setMobileView('adjust')}
+                    >
+                      <Sliders className="w-5 h-5" />
+                    </button>
                   </>
                 )}
               </div>
             </div>
 
             {/* Canvas Container */}
-            <div className="flex-1 min-h-0 flex items-center justify-center p-4 md:p-8 overflow-hidden bg-zinc-950 relative">
+            <div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden bg-zinc-950 relative">
               {isDragging && (
                 <div className="absolute inset-0 z-50 bg-indigo-500/20 backdrop-blur-sm border-2 border-indigo-500 border-dashed m-4 rounded-xl flex items-center justify-center">
                   <div className="bg-zinc-900 p-6 rounded-2xl shadow-2xl flex flex-col items-center gap-4">
@@ -688,36 +710,40 @@ export default function App() {
                   </div>
                 </div>
               )}
-              <TransformComponent wrapperClass="w-full h-full flex items-center justify-center" contentClass="w-full h-full flex items-center justify-center">
-                {!selectedImage ? (
-                  <div className="text-center text-zinc-500">
-                    <ImageIcon className="w-16 h-16 mx-auto mb-4 opacity-20" />
-                    <p>Select or upload an image to start processing</p>
-                    <p className="text-sm mt-2 opacity-60">You can also drag and drop images here</p>
-                  </div>
-                ) : (
-                  <div className="relative flex items-center justify-center w-full h-full">
-                    <ReactCrop 
-                      crop={selectedImage.crop} 
-                      onChange={(c, pc) => updateCrop(c, pc)}
-                      className="max-w-full max-h-full"
-                      disabled={!isCropping}
-                      locked={!isCropping}
-                      style={{ display: isCropping ? 'block' : 'none' }}
-                      ruleOfThirds={true}
-                      aspect={selectedImage.cropAspect}
-                    >
+              <TransformComponent 
+                wrapperClass="w-full h-full h-[750px]" 
+                contentClass="w-full h-full flex items-center justify-center"
+              >
+                  {!selectedImage ? (
+                    <div className="text-center text-zinc-500">
+                      <ImageIcon className="w-16 h-16 mx-auto mb-4 opacity-20" />
+                      <p>Select or upload an image to start processing</p>
+                      <p className="text-sm mt-2 opacity-60">You can also drag and drop images here</p>
+                    </div>
+                  ) : (
+                    <div className="relative flex items-center justify-center w-full h-full p-4">
+                      <ReactCrop 
+                        crop={selectedImage.crop} 
+                        onChange={(c, pc) => updateCrop(c, pc)}
+                        className="max-w-full max-h-full"
+                        disabled={!isCropping}
+                        locked={!isCropping}
+                        style={{ display: isCropping ? 'flex' : 'none' }}
+                        ruleOfThirds={true}
+                        aspect={selectedImage.cropAspect}
+                      >
+                        <canvas
+                          ref={isCropping ? canvasRef : null}
+                          className="max-w-full max-h-full w-auto h-auto object-contain shadow-2xl rounded-sm"
+                          style={{ backgroundImage: 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyEgSRC0AQAK9CGVG3UW0AAAAABJRU5ErkJggg==")' }}
+                        />
+                      </ReactCrop>
                       <canvas
-                        ref={isCropping ? canvasRef : null}
+                        ref={!isCropping ? canvasRef : null}
                         className="max-w-full max-h-full w-auto h-auto object-contain shadow-2xl rounded-sm"
-                        style={{ backgroundImage: 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyEgSRC0AQAK9CGVG3UW0AAAAABJRU5ErkJggg==")' }}
+                        style={{ display: isCropping ? 'none' : 'block', backgroundImage: 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyEgSRC0AQAK9CGVG3UW0AAAAABJRU5ErkJggg==")' }}
                       />
-                    </ReactCrop>
-                    <canvas
-                      ref={!isCropping ? canvasRef : null}
-                      className="max-w-full max-h-full w-auto h-auto object-contain shadow-2xl rounded-sm"
-                      style={{ display: isCropping ? 'none' : 'block', backgroundImage: 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyEgSRC0AQAK9CGVG3UW0AAAAABJRU5ErkJggg==")' }}
-                    />
+
                     {compareMode === 'split' && !isCropping && (
                       <>
                         <canvas
@@ -786,7 +812,16 @@ export default function App() {
       </TransformWrapper>
 
       {/* Right Sidebar: Adjustments */}
-      <div className="w-80 bg-zinc-900 border-l border-zinc-800 flex flex-col h-screen">
+      <div className={`
+        fixed inset-0 z-50 lg:relative lg:z-0 lg:flex lg:w-80 bg-zinc-900 border-l border-zinc-800 flex-col
+        ${mobileView === 'adjust' ? 'flex' : 'hidden lg:flex'}
+      `}>
+        <div className="lg:hidden p-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-900">
+          <span className="font-semibold">Adjustments</span>
+          <button onClick={() => setMobileView('preview')} className="p-1 text-zinc-400 hover:text-zinc-100">
+            <X className="w-6 h-6" />
+          </button>
+        </div>
         {/* Histogram - Fixed at top */}
         <div className="p-4 border-b border-zinc-800 bg-zinc-900 z-10">
           <Histogram data={histogramData} />
@@ -958,7 +993,7 @@ export default function App() {
               </div>
 
               {adjustments.lut && (
-                <SliderControl label="Intensity" icon={<Layers className="w-4 h-4" />} value={adjustments.lutIntensity ?? 100} min={0} max={100} onChange={(v) => updateAdjustments({ lutIntensity: v })} />
+                <SliderControl label="Intensity" icon={<Layers className="w-4 h-4" />} value={adjustments.lutIntensity ?? 100} min={0} max={100} defaultValue={100} onChange={(v) => updateAdjustments({ lutIntensity: v })} />
               )}
             </div>
 
@@ -973,7 +1008,7 @@ export default function App() {
                 <SliderControl label="Shadows" icon={<Moon className="w-4 h-4" />} value={adjustments.shadows} min={-100} max={100} onChange={(v) => updateAdjustments({ shadows: v })} />
                 <SliderControl label="Whites" icon={<Sun className="w-4 h-4 text-zinc-400" />} value={adjustments.whites} min={-100} max={100} onChange={(v) => updateAdjustments({ whites: v })} />
                 <SliderControl label="Blacks" icon={<Moon className="w-4 h-4 text-zinc-600" />} value={adjustments.blacks} min={-100} max={100} onChange={(v) => updateAdjustments({ blacks: v })} />
-                <SliderControl label="Gamma" icon={<RefreshCcw className="w-4 h-4" />} value={adjustments.gamma} min={10} max={300} onChange={(v) => updateAdjustments({ gamma: v })} />
+                <SliderControl label="Gamma" icon={<RefreshCcw className="w-4 h-4" />} value={adjustments.gamma} min={10} max={300} defaultValue={100} onChange={(v) => updateAdjustments({ gamma: v })} />
               </div>
 
               <SliderControl label="Saturation" icon={<Palette className="w-4 h-4" />} value={adjustments.saturation} min={-100} max={100} onChange={(v) => updateAdjustments({ saturation: v })} />
@@ -1091,6 +1126,37 @@ export default function App() {
                   value={adjustments.colorNoiseReduction} 
                   min={0} max={100} 
                   onChange={(v) => updateAdjustments({ colorNoiseReduction: v })} 
+                />
+              </div>
+
+              {/* Halation Section */}
+              <div className="pt-6 border-t border-zinc-800/50 space-y-6">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Halation</p>
+                  <Sparkles className="w-4 h-4 text-red-400" />
+                </div>
+                <SliderControl 
+                  label="Intensity" 
+                  icon={<Sun className="w-4 h-4 text-red-500" />} 
+                  value={adjustments.halationIntensity} 
+                  min={0} max={100} 
+                  onChange={(v) => updateAdjustments({ halationIntensity: v })} 
+                />
+                <SliderControl 
+                  label="Radius" 
+                  icon={<Maximize2 className="w-4 h-4 text-zinc-400" />} 
+                  value={adjustments.halationRadius} 
+                  min={1} max={50} 
+                  defaultValue={10}
+                  onChange={(v) => updateAdjustments({ halationRadius: v })} 
+                />
+                <SliderControl 
+                  label="Threshold" 
+                  icon={<Minimize2 className="w-4 h-4 text-zinc-400" />} 
+                  value={adjustments.halationThreshold} 
+                  min={0} max={255} 
+                  defaultValue={80}
+                  onChange={(v) => updateAdjustments({ halationThreshold: v })} 
                 />
               </div>
             </div>

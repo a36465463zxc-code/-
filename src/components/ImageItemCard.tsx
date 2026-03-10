@@ -24,9 +24,9 @@ export function ImageItemCard({ item, isSelected, onSelect, onRemove }: ImageIte
       </div>
       <button 
         onClick={(e) => { e.stopPropagation(); onRemove(); }}
-        className="p-1.5 text-zinc-500 hover:text-red-400 hover:bg-red-400/10 rounded transition-colors"
+        className="p-2.5 text-zinc-500 hover:text-red-400 hover:bg-red-400/10 rounded transition-colors"
       >
-        <Trash2 className="w-4 h-4" />
+        <Trash2 className="w-5 h-5" />
       </button>
     </div>
   );

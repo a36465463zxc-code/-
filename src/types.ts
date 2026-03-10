@@ -34,6 +34,9 @@ export interface Adjustments {
   sharpen: number;
   clarity: number;
   colorNoiseReduction: number;
+  halationIntensity: number;
+  halationRadius: number;
+  halationThreshold: number;
 }
 
 export const defaultAdjustments: Adjustments = {
@@ -64,6 +67,9 @@ export const defaultAdjustments: Adjustments = {
   sharpen: 0,
   clarity: 0,
   colorNoiseReduction: 0,
+  halationIntensity: 0,
+  halationRadius: 10,
+  halationThreshold: 80,
 };
 
 export interface ImageItem {

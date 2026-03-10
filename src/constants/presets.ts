@@ -20,7 +20,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       saturation: -5,
       contrast: 5,
       highlights: -5,
-      shadows: 5
+      shadows: 5,
+      halationIntensity: 0
     }
   },
   {
@@ -33,7 +34,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       tint: 8,
       saturation: 4,
       contrast: -5,
-      highlights: 5
+      highlights: 5,
+      halationIntensity: 0
     }
   },
   {
@@ -45,7 +47,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       temperature: 12,
       tint: -2,
       saturation: 15,
-      contrast: 10
+      contrast: 10,
+      halationIntensity: 0
     }
   },
   {
@@ -57,7 +60,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       temperature: 4,
       saturation: 25,
       contrast: 18,
-      highlights: -8
+      highlights: -8,
+      halationIntensity: 0
     }
   },
   {
@@ -70,7 +74,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       tint: -1,
       saturation: 12,
       contrast: 8,
-      shadows: -2
+      shadows: -2,
+      halationIntensity: 0
     }
   },
   {
@@ -82,7 +87,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       temperature: -4,
       tint: 5,
       saturation: 2,
-      contrast: 4
+      contrast: 4,
+      halationIntensity: 0
     }
   },
   {
@@ -94,7 +100,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       temperature: -2,
       tint: 4,
       saturation: 5,
-      contrast: 6
+      contrast: 6,
+      halationIntensity: 0
     }
   },
   // Black & White
@@ -107,7 +114,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       contrast: 25,
       shadows: -15,
       highlights: 10,
-      exposure: 5
+      exposure: 5,
+      halationIntensity: 0
     }
   },
   {
@@ -118,7 +126,91 @@ export const FILM_PRESETS: FilmPreset[] = [
       filmType: 'bw_neg',
       contrast: 12,
       shadows: 5,
-      highlights: -2
+      highlights: -2,
+      halationIntensity: 0
+    }
+  },
+  // Motion Picture Film
+  {
+    id: 'vision3-500t',
+    name: 'Kodak Vision3 5219 (500T)',
+    description: 'High dynamic range tungsten-balanced motion picture film.',
+    adjustments: {
+      filmType: 'color_neg',
+      temperature: -15,
+      tint: 5,
+      contrast: 8,
+      saturation: 5,
+      halationIntensity: 0
+    }
+  },
+  {
+    id: 'vision3-50d',
+    name: 'Kodak Vision3 5203 (50D)',
+    description: 'Fine grain daylight-balanced motion picture film.',
+    adjustments: {
+      filmType: 'color_neg',
+      temperature: 5,
+      tint: -2,
+      contrast: 12,
+      saturation: 10,
+      halationIntensity: 0
+    }
+  },
+  {
+    id: 'vision3-250d',
+    name: 'Kodak Vision3 5207 (250D)',
+    description: 'Versatile daylight-balanced motion picture film.',
+    adjustments: {
+      filmType: 'color_neg',
+      temperature: 2,
+      tint: 0,
+      contrast: 10,
+      saturation: 8,
+      halationIntensity: 0
+    }
+  },
+  {
+    id: 'vision3-200t',
+    name: 'Kodak Vision3 5213 (200T)',
+    description: 'Fine grain tungsten-balanced motion picture film.',
+    adjustments: {
+      filmType: 'color_neg',
+      temperature: -12,
+      tint: 4,
+      contrast: 9,
+      saturation: 6,
+      halationIntensity: 0
+    }
+  },
+  {
+    id: 'cinestill-800t',
+    name: 'CineStill 800T',
+    description: 'Tungsten-balanced film with signature red halation.',
+    adjustments: {
+      filmType: 'color_neg',
+      temperature: -20,
+      tint: 10,
+      contrast: 15,
+      saturation: 12,
+      halationIntensity: 45,
+      halationRadius: 15,
+      halationThreshold: 70
+    }
+  },
+  {
+    id: 'cinestill-400d',
+    name: 'CineStill 400D',
+    description: 'Daylight-balanced film with soft red halation.',
+    adjustments: {
+      filmType: 'color_neg',
+      temperature: 4,
+      tint: 2,
+      contrast: 12,
+      saturation: 10,
+      halationIntensity: 30,
+      halationRadius: 12,
+      halationThreshold: 75
     }
   }
 ];
