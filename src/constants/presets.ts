@@ -8,6 +8,7 @@ export interface FilmPreset {
 }
 
 export const FILM_PRESETS: FilmPreset[] = [
+  // Color Negative
   {
     id: 'portra-400',
     name: 'Kodak Portra 400',
@@ -20,18 +21,6 @@ export const FILM_PRESETS: FilmPreset[] = [
       contrast: 5,
       highlights: -5,
       shadows: 5
-    }
-  },
-  {
-    id: 'tri-x-400',
-    name: 'Kodak Tri-X 400',
-    description: 'Classic high-contrast black and white with deep blacks.',
-    adjustments: {
-      filmType: 'bw_neg',
-      contrast: 25,
-      shadows: -15,
-      highlights: 10,
-      exposure: 5
     }
   },
   {
@@ -60,17 +49,6 @@ export const FILM_PRESETS: FilmPreset[] = [
     }
   },
   {
-    id: 'hp5',
-    name: 'Ilford HP5 Plus',
-    description: 'Versatile black and white with moderate contrast and wide latitude.',
-    adjustments: {
-      filmType: 'bw_neg',
-      contrast: 12,
-      shadows: 5,
-      highlights: -2
-    }
-  },
-  {
     id: 'ektar-100',
     name: 'Kodak Ektar 100',
     description: 'Ultra-vibrant colors and high contrast for landscapes.',
@@ -83,15 +61,64 @@ export const FILM_PRESETS: FilmPreset[] = [
     }
   },
   {
-    id: 'velvia-50',
-    name: 'Fujifilm Velvia 50',
-    description: 'Legendary slide film with extreme saturation and contrast.',
+    id: 'ultramax-400',
+    name: 'Kodak UltraMax 400',
+    description: 'Vibrant, versatile consumer film with warm highlights.',
     adjustments: {
-      filmType: 'positive',
-      saturation: 35,
+      filmType: 'color_neg',
+      temperature: 6,
+      tint: -1,
+      saturation: 12,
+      contrast: 8,
+      shadows: -2
+    }
+  },
+  {
+    id: 'fuji-200',
+    name: 'Fujifilm 200',
+    description: 'Natural colors with a slight green bias in the shadows.',
+    adjustments: {
+      filmType: 'color_neg',
+      temperature: -4,
+      tint: 5,
+      saturation: 2,
+      contrast: 4
+    }
+  },
+  {
+    id: 'fuji-400',
+    name: 'Fujifilm 400',
+    description: 'Versatile color film with fine grain and natural tones.',
+    adjustments: {
+      filmType: 'color_neg',
+      temperature: -2,
+      tint: 4,
+      saturation: 5,
+      contrast: 6
+    }
+  },
+  // Black & White
+  {
+    id: 'tri-x-400',
+    name: 'Kodak Tri-X 400',
+    description: 'Classic high-contrast black and white with deep blacks.',
+    adjustments: {
+      filmType: 'bw_neg',
       contrast: 25,
-      highlights: -10,
-      shadows: -10
+      shadows: -15,
+      highlights: 10,
+      exposure: 5
+    }
+  },
+  {
+    id: 'hp5',
+    name: 'Ilford HP5 Plus',
+    description: 'Versatile black and white with moderate contrast and wide latitude.',
+    adjustments: {
+      filmType: 'bw_neg',
+      contrast: 12,
+      shadows: 5,
+      highlights: -2
     }
   }
 ];

@@ -1,12 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Download, RefreshCcw, Sliders, Sun, Thermometer, Droplet, Contrast, Palette, Image as ImageIcon, SplitSquareHorizontal, Crop as CropIcon, Layers, SunDim, Moon, SaveAll, ChevronDown, ChevronUp, Sparkles, RotateCw, Maximize2, Minimize2 } from 'lucide-react';
+import { Upload, Download, RefreshCcw, Sliders, Sun, Thermometer, Droplet, Contrast, Palette, Image as ImageIcon, SplitSquareHorizontal, Crop as CropIcon, Layers, SunDim, Moon, SaveAll, ChevronDown, ChevronUp, Sparkles, RotateCw, Maximize2, Minimize2, Zap, Wind, Shield, X, Check, ZoomIn, ZoomOut, Maximize } from 'lucide-react';
 import UTIF from 'utif';
 import ReactCrop, { Crop, PixelCrop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
+import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
-import { FilmType, Adjustments, defaultAdjustments, ImageItem } from './types';
+import { FilmType, Adjustments, defaultAdjustments, ImageItem, LUT3D } from './types';
 import { calculateLevels, processImageData, calculateAutoWhiteBalance, calculateHistogram } from './utils/imageProcessing';
 import { parseCubeLUT } from './utils/lutParser';
 import { SliderControl } from './components/SliderControl';
@@ -18,14 +19,25 @@ export default function App() {
   const [images, setImages] = useState<ImageItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isComparing, setIsComparing] = useState(false);
+  const [compareMode, setCompareMode] = useState<'none' | 'split'>('none');
+  const [splitPosition, setSplitPosition] = useState(50);
   const [isCropping, setIsCropping] = useState(false);
   const [isPresetsOpen, setIsPresetsOpen] = useState(false);
+  const [exportConfig, setExportConfig] = useState({
+    format: 'image/jpeg' as 'image/jpeg' | 'image/png' | 'image/webp',
+    quality: 0.95,
+  });
+  const [isExportSettingsOpen, setIsExportSettingsOpen] = useState(false);
   const [zoomMode, setZoomMode] = useState<'fit' | 'original'>('fit');
+  const [colorBalanceRange, setColorBalanceRange] = useState<'shadows' | 'midtones' | 'highlights'>('midtones');
+  const [availableLuts, setAvailableLuts] = useState<LUT3D[]>([]);
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const originalCanvasRef = useRef<HTMLCanvasElement>(null);
+  const sliderRef = useRef<HTMLDivElement>(null);
   const [originalImageData, setOriginalImageData] = useState<ImageData | null>(null);
   const [levels, setLevels] = useState<any>(null);
-  const [histogramData, setHistogramData] = useState<{r: number[], g: number[], b: number[]} | null>(null);
+  const [histogramData, setHistogramData] = useState<{r: number[], g: number[], b: number[], l: number[]} | null>(null);
 
   const selectedImage = images.find(img => img.id === selectedId);
   const adjustments = selectedImage?.adjustments || defaultAdjustments;
@@ -35,6 +47,20 @@ export default function App() {
     setImages(prev => prev.map(img => 
       img.id === selectedId ? { ...img, adjustments: { ...img.adjustments, ...newAdj } } : img
     ));
+  };
+
+  const updateColorBalance = (range: 'shadows' | 'midtones' | 'highlights', channel: 'r' | 'g' | 'b', value: number) => {
+    if (!selectedId) return;
+    const currentCB = adjustments.colorBalance;
+    updateAdjustments({
+      colorBalance: {
+        ...currentCB,
+        [range]: {
+          ...currentCB[range],
+          [channel]: value
+        }
+      }
+    });
   };
 
   const updateCrop = (crop: Crop, percentCrop: Crop) => {
@@ -51,13 +77,18 @@ export default function App() {
     ));
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+
+  const processFiles = async (files: File[]) => {
     if (files.length === 0) return;
+    setIsUploading(true);
+    setUploadProgress(0);
 
     const newImages: ImageItem[] = [];
 
-    for (const file of files) {
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
       const ext = file.name.split('.').pop()?.toLowerCase() || '';
       const isTiffOrRaw = ['tif', 'tiff', 'dng', 'cr2', 'nef', 'arw'].includes(ext);
 
@@ -67,19 +98,19 @@ export default function App() {
         try {
           const ifds = UTIF.decode(buff);
           let vsns = ifds, ma = 0, page = vsns[0];
-          if (ifds[0].subIFD) vsns = vsns.concat(ifds[0].subIFD);
+          if (ifds[0].subIFD) vsns = vsns.concat(ifds[0].subIFD as any);
           
-          for (let i = 0; i < vsns.length; i++) {
-            const img = vsns[i];
+          for (let j = 0; j < vsns.length; j++) {
+            const img = vsns[j] as any;
             if (img["t258"] == null || img["t258"].length < 3) continue;
             const ar = img["t256"] * img["t257"];
             if (ar > ma) { ma = ar; page = img; }
           }
           
-          UTIF.decodeImage(buff, page, ifds);
+          (UTIF as any).decodeImage(buff, page, ifds);
           const rgba = UTIF.toRGBA8(page);
-          const w = page.width;
-          const h = page.height;
+          const w = (page as any).width;
+          const h = (page as any).height;
           
           const cnv = document.createElement("canvas");
           cnv.width = w;
@@ -87,7 +118,7 @@ export default function App() {
           const ctx = cnv.getContext("2d");
           if (ctx) {
             const imgd = ctx.createImageData(w, h);
-            for (let i = 0; i < rgba.length; i++) imgd.data[i] = rgba[i];
+            for (let k = 0; k < rgba.length; k++) imgd.data[k] = rgba[k];
             ctx.putImageData(imgd, 0, 0);
             src = cnv.toDataURL("image/jpeg", 0.95);
           }
@@ -111,12 +142,21 @@ export default function App() {
           adjustments: { ...defaultAdjustments }
         });
       }
+      setUploadProgress(Math.round(((i + 1) / files.length) * 100));
     }
 
     setImages(prev => [...prev, ...newImages]);
     if (!selectedId && newImages.length > 0) {
       setSelectedId(newImages[0].id);
     }
+    setIsUploading(false);
+    setUploadProgress(0);
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []) as File[];
+    await processFiles(files);
+    e.target.value = '';
   };
 
   const handleLutUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -124,6 +164,11 @@ export default function App() {
     if (!file) return;
     try {
       const lut = await parseCubeLUT(file);
+      setAvailableLuts(prev => {
+        const exists = prev.find(l => l.name === lut.name);
+        if (exists) return prev;
+        return [...prev, lut];
+      });
       updateAdjustments({ lut });
     } catch (err) {
       alert('Failed to parse LUT: ' + (err as Error).message);
@@ -157,7 +202,7 @@ export default function App() {
       const imageData = ctx.getImageData(0, 0, width, height);
       setOriginalImageData(imageData);
       
-      const isNeg = selectedImage.adjustments.filmType === 'color_neg' || selectedImage.adjustments.filmType === 'bw_neg';
+      const isNeg = selectedImage.adjustments.filmType === 'color_neg' || selectedImage.adjustments.filmType === 'bw_neg' || selectedImage.adjustments.filmType === 'log';
       setLevels(calculateLevels(imageData.data, isNeg));
     };
     img.src = selectedImage.src;
@@ -165,7 +210,7 @@ export default function App() {
 
   useEffect(() => {
     if (!originalImageData) return;
-    const isNeg = adjustments.filmType === 'color_neg' || adjustments.filmType === 'bw_neg';
+    const isNeg = adjustments.filmType === 'color_neg' || adjustments.filmType === 'bw_neg' || adjustments.filmType === 'log';
     setLevels(calculateLevels(originalImageData.data, isNeg));
   }, [adjustments.filmType, originalImageData]);
 
@@ -186,36 +231,35 @@ export default function App() {
     const isRotated90 = rotation === 90 || rotation === 270;
 
     // 1. Process pixels
+    const currentAdjustments = isComparing 
+      ? { ...defaultAdjustments, filmType: adjustments.filmType, autoMask: adjustments.autoMask }
+      : adjustments;
+
     const processedData = processImageData(
       originalImageData.data,
       originalImageData.width,
       originalImageData.height,
-      adjustments,
+      currentAdjustments,
       levels
     );
 
-    // 2. Create a temporary canvas for the processed full image
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = originalImageData.width;
-    tempCanvas.height = originalImageData.height;
-    const tempCtx = tempCanvas.getContext('2d');
-    if (!tempCtx) return;
-    tempCtx.putImageData(processedData, 0, 0);
+    let originalProcessedData: ImageData | null = null;
+    if (compareMode === 'split' && !isComparing) {
+      originalProcessedData = processImageData(
+        originalImageData.data,
+        originalImageData.width,
+        originalImageData.height,
+        { ...defaultAdjustments, filmType: adjustments.filmType, autoMask: adjustments.autoMask },
+        levels
+      );
+    }
 
-    // 3. Handle Rotation and Cropping
+    // 2. Handle Rotation and Cropping
     let finalWidth = originalImageData.width;
     let finalHeight = originalImageData.height;
     if (isRotated90) {
       finalWidth = originalImageData.height;
       finalHeight = originalImageData.width;
-    }
-
-    // If comparing, show original (unrotated, uncropped)
-    if (isComparing) {
-      canvasRef.current.width = originalImageData.width;
-      canvasRef.current.height = originalImageData.height;
-      ctx.putImageData(originalImageData, 0, 0);
-      return;
     }
 
     const drawRotated = (targetCtx: CanvasRenderingContext2D, source: HTMLCanvasElement | HTMLImageElement, w: number, h: number, rot: number) => {
@@ -230,40 +274,56 @@ export default function App() {
       targetCtx.restore();
     };
 
-    if (isCropping || !selectedImage?.crop || selectedImage.crop.width === 0 || selectedImage.crop.height === 0) {
-      canvasRef.current.width = finalWidth;
-      canvasRef.current.height = finalHeight;
-      drawRotated(ctx, tempCanvas, finalWidth, finalHeight, rotation);
-    } else {
-      const crop = selectedImage.crop;
-      const scaleX = finalWidth / 100;
-      const scaleY = finalHeight / 100;
-      
-      const croppedWidth = crop.width * scaleX;
-      const croppedHeight = crop.height * scaleY;
-      
-      canvasRef.current.width = croppedWidth;
-      canvasRef.current.height = croppedHeight;
+    const renderToCanvas = (targetCanvas: HTMLCanvasElement, imageData: ImageData) => {
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = originalImageData.width;
+      tempCanvas.height = originalImageData.height;
+      const tempCtx = tempCanvas.getContext('2d');
+      if (!tempCtx) return;
+      tempCtx.putImageData(imageData, 0, 0);
 
-      // Draw full rotated image to a buffer first to then crop it
-      const rotatedBuffer = document.createElement('canvas');
-      rotatedBuffer.width = finalWidth;
-      rotatedBuffer.height = finalHeight;
-      const rbCtx = rotatedBuffer.getContext('2d');
-      if (rbCtx) {
-        drawRotated(rbCtx, tempCanvas, finalWidth, finalHeight, rotation);
-        ctx.drawImage(
-          rotatedBuffer,
-          crop.x * scaleX,
-          crop.y * scaleY,
-          croppedWidth,
-          croppedHeight,
-          0,
-          0,
-          croppedWidth,
-          croppedHeight
-        );
+      const targetCtx = targetCanvas.getContext('2d');
+      if (!targetCtx) return;
+
+      if (isCropping || !selectedImage?.crop || selectedImage.crop.width === 0 || selectedImage.crop.height === 0) {
+        targetCanvas.width = finalWidth;
+        targetCanvas.height = finalHeight;
+        drawRotated(targetCtx, tempCanvas, finalWidth, finalHeight, rotation);
+      } else {
+        const crop = selectedImage.crop;
+        const scaleX = finalWidth / 100;
+        const scaleY = finalHeight / 100;
+        
+        const croppedWidth = crop.width * scaleX;
+        const croppedHeight = crop.height * scaleY;
+        
+        targetCanvas.width = croppedWidth;
+        targetCanvas.height = croppedHeight;
+
+        const rotatedBuffer = document.createElement('canvas');
+        rotatedBuffer.width = finalWidth;
+        rotatedBuffer.height = finalHeight;
+        const rbCtx = rotatedBuffer.getContext('2d');
+        if (rbCtx) {
+          drawRotated(rbCtx, tempCanvas, finalWidth, finalHeight, rotation);
+          targetCtx.drawImage(
+            rotatedBuffer,
+            crop.x * scaleX,
+            crop.y * scaleY,
+            croppedWidth,
+            croppedHeight,
+            0,
+            0,
+            croppedWidth,
+            croppedHeight
+          );
+        }
       }
+    };
+
+    renderToCanvas(canvasRef.current, processedData);
+    if (originalProcessedData && originalCanvasRef.current) {
+      renderToCanvas(originalCanvasRef.current, originalProcessedData);
     }
     
     // 4. Histogram
@@ -271,7 +331,7 @@ export default function App() {
       const currentData = ctx.getImageData(0, 0, canvasRef.current.width, canvasRef.current.height);
       setHistogramData(calculateHistogram(currentData));
     }
-  }, [originalImageData, adjustments, levels, isComparing, isCropping, selectedImage?.crop]);
+  }, [originalImageData, adjustments, levels, isComparing, compareMode, isCropping, selectedImage?.crop]);
 
   const getCroppedCanvas = (canvas: HTMLCanvasElement, crop: Crop) => {
     if (!crop || crop.width === 0 || crop.height === 0) return canvas;
@@ -302,7 +362,7 @@ export default function App() {
 
   const handleAutoWhiteBalance = () => {
     if (!originalImageData || !selectedImage) return;
-    const isNeg = adjustments.filmType === 'color_neg' || adjustments.filmType === 'bw_neg';
+    const isNeg = adjustments.filmType === 'color_neg' || adjustments.filmType === 'bw_neg' || adjustments.filmType === 'log';
     const wbOffsets = calculateAutoWhiteBalance(originalImageData.data, isNeg, adjustments.autoMask, levels);
     updateAdjustments({
       rOffset: wbOffsets.rOffset,
@@ -323,8 +383,9 @@ export default function App() {
       : canvasRef.current;
       
     const link = document.createElement('a');
-    link.download = `processed-${selectedImage.name}.jpg`;
-    link.href = finalCanvas.toDataURL('image/jpeg', 0.95);
+    const extension = exportConfig.format.split('/')[1];
+    link.download = `processed-${selectedImage.name}.${extension}`;
+    link.href = finalCanvas.toDataURL(exportConfig.format, exportConfig.quality);
     link.click();
   };
 
@@ -354,7 +415,7 @@ export default function App() {
        ctx.drawImage(img, 0, 0, width, height);
        const imageData = ctx.getImageData(0, 0, width, height);
        
-       const isNeg = imgItem.adjustments.filmType === 'color_neg' || imgItem.adjustments.filmType === 'bw_neg';
+       const isNeg = imgItem.adjustments.filmType === 'color_neg' || imgItem.adjustments.filmType === 'bw_neg' || imgItem.adjustments.filmType === 'log';
        const imgLevels = calculateLevels(imageData.data, isNeg);
        
        const processedData = processImageData(
@@ -368,9 +429,9 @@ export default function App() {
        
        const finalCanvas = imgItem.crop ? getCroppedCanvas(canvas, imgItem.crop as Crop) : canvas;
        
-       const blob = await new Promise<Blob | null>(resolve => finalCanvas.toBlob(resolve, 'image/jpeg', 0.95));
+       const blob = await new Promise<Blob | null>(resolve => finalCanvas.toBlob(resolve, exportConfig.format, exportConfig.quality));
        if (blob) {
-         zip.file(`processed-${imgItem.name}.jpg`, blob);
+         zip.file(`processed-${imgItem.name}.${exportConfig.format.split('/')[1]}`, blob);
        }
     }
     
@@ -385,8 +446,45 @@ export default function App() {
     }
   };
 
+  const [isDragging, setIsDragging] = useState(false);
+  const dragCounter = useRef(0);
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounter.current += 1;
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounter.current -= 1;
+    if (dragCounter.current === 0) {
+      setIsDragging(false);
+    }
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounter.current = 0;
+    setIsDragging(false);
+    const files = Array.from(e.dataTransfer.files) as File[];
+    await processFiles(files);
+  };
+
   return (
-    <div className="flex h-screen bg-zinc-950 text-zinc-100 font-sans overflow-hidden">
+    <div 
+      className="flex h-screen bg-zinc-950 text-zinc-100 font-sans overflow-hidden"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       {/* Left Sidebar: Image List */}
       <div className="w-64 bg-zinc-900 border-r border-zinc-800 flex flex-col">
         <div className="p-4 border-b border-zinc-800">
@@ -435,150 +533,332 @@ export default function App() {
       </div>
 
       {/* Main Area */}
-      <div className="flex-1 flex flex-col bg-zinc-950 relative">
-        {/* Toolbar */}
-        <div className="h-14 border-b border-zinc-800 flex items-center justify-between px-6">
-          <div className="flex items-center gap-2">
-            {!isCropping && (
+      <TransformWrapper
+        disabled={isCropping}
+        initialScale={1}
+        minScale={0.1}
+        maxScale={10}
+        centerOnInit={true}
+        wheel={{ step: 0.1 }}
+      >
+        {({ zoomIn, zoomOut, resetTransform }) => (
+          <div className="flex-1 flex flex-col bg-zinc-950 relative">
+            {/* Toolbar */}
+            <div className="h-14 border-b border-zinc-800 flex items-center justify-between px-6">
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setIsCropping(true)}
-                  disabled={!selectedImage}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-md transition-colors text-sm font-medium bg-zinc-900 hover:bg-zinc-800 text-zinc-300 disabled:opacity-50"
-                >
-                  <CropIcon className="w-4 h-4" />
-                  Crop
-                </button>
-                <button
-                  onClick={handleRotate}
-                  disabled={!selectedImage}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-md transition-colors text-sm font-medium bg-zinc-900 hover:bg-zinc-800 text-zinc-300 disabled:opacity-50"
-                  title="Rotate 90°"
-                >
-                  <RotateCw className="w-4 h-4" />
-                  Rotate
-                </button>
-                <button
-                  onClick={() => setZoomMode(zoomMode === 'fit' ? 'original' : 'fit')}
-                  disabled={!selectedImage}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-md transition-colors text-sm font-medium border ${zoomMode === 'original' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800'} disabled:opacity-50`}
-                  title={zoomMode === 'fit' ? 'Actual Size' : 'Fit to Screen'}
-                >
-                  {zoomMode === 'fit' ? <Maximize2 className="w-4 h-4" /> : <Minimize2 className="w-4 h-4" />}
-                  {zoomMode === 'fit' ? 'Fit' : '1:1'}
-                </button>
+                {!isCropping && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setIsCropping(true)}
+                      disabled={!selectedImage}
+                      className="flex items-center justify-center w-8 h-8 rounded-md transition-colors bg-zinc-900 hover:bg-zinc-800 text-zinc-300 disabled:opacity-50"
+                      title="Crop"
+                    >
+                      <CropIcon className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={handleRotate}
+                      disabled={!selectedImage}
+                      className="flex items-center justify-center w-8 h-8 rounded-md transition-colors bg-zinc-900 hover:bg-zinc-800 text-zinc-300 disabled:opacity-50"
+                      title="Rotate 90°"
+                    >
+                      <RotateCw className="w-4 h-4" />
+                    </button>
+                    <div className="flex items-center bg-zinc-900 rounded-md border border-zinc-800 overflow-hidden h-8">
+                      <button
+                        onClick={() => zoomOut()}
+                        disabled={!selectedImage}
+                        className="px-2 hover:bg-zinc-800 text-zinc-300 transition-colors disabled:opacity-50 h-full flex items-center justify-center"
+                        title="Zoom Out"
+                      >
+                        <ZoomOut className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => resetTransform()}
+                        disabled={!selectedImage}
+                        className="px-2 hover:bg-zinc-800 text-zinc-300 transition-colors border-x border-zinc-800 disabled:opacity-50 h-full flex items-center justify-center"
+                        title="Reset Zoom"
+                      >
+                        <Maximize className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => zoomIn()}
+                        disabled={!selectedImage}
+                        className="px-2 hover:bg-zinc-800 text-zinc-300 transition-colors disabled:opacity-50 h-full flex items-center justify-center"
+                        title="Zoom In"
+                      >
+                        <ZoomIn className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {isCropping && (
+                  <div className="flex items-center gap-1 bg-zinc-900 p-1 rounded-md border border-zinc-800 h-8">
+                    <span className="text-xs text-zinc-500 px-2 font-medium">Aspect:</span>
+                    <button onClick={() => updateCropAspect(undefined)} className={`px-2 h-full text-xs font-medium rounded transition-colors ${!selectedImage?.cropAspect ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}>Free</button>
+                    <button onClick={() => updateCropAspect(1)} className={`px-2 h-full text-xs font-medium rounded transition-colors ${selectedImage?.cropAspect === 1 ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}>1:1</button>
+                    <button onClick={() => updateCropAspect(4/3)} className={`px-2 h-full text-xs font-medium rounded transition-colors ${selectedImage?.cropAspect === 4/3 ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}>4:3</button>
+                    <button onClick={() => updateCropAspect(3/2)} className={`px-2 h-full text-xs font-medium rounded transition-colors ${selectedImage?.cropAspect === 3/2 ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}>3:2</button>
+                    <button onClick={() => updateCropAspect(16/9)} className={`px-2 h-full text-xs font-medium rounded transition-colors ${selectedImage?.cropAspect === 16/9 ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}>16:9</button>
+                  </div>
+                )}
               </div>
-            )}
-            {isCropping && (
-              <div className="flex items-center gap-1 bg-zinc-900 p-1 rounded-md border border-zinc-800">
-                <span className="text-xs text-zinc-500 px-2 font-medium">Aspect Ratio:</span>
-                <button onClick={() => updateCropAspect(undefined)} className={`px-2 py-1 text-xs font-medium rounded transition-colors ${!selectedImage?.cropAspect ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}>Free</button>
-                <button onClick={() => updateCropAspect(1)} className={`px-2 py-1 text-xs font-medium rounded transition-colors ${selectedImage?.cropAspect === 1 ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}>1:1</button>
-                <button onClick={() => updateCropAspect(4/3)} className={`px-2 py-1 text-xs font-medium rounded transition-colors ${selectedImage?.cropAspect === 4/3 ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}>4:3</button>
-                <button onClick={() => updateCropAspect(3/2)} className={`px-2 py-1 text-xs font-medium rounded transition-colors ${selectedImage?.cropAspect === 3/2 ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}>3:2</button>
-                <button onClick={() => updateCropAspect(16/9)} className={`px-2 py-1 text-xs font-medium rounded transition-colors ${selectedImage?.cropAspect === 16/9 ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}>16:9</button>
+              <div className="flex items-center gap-2">
+                {isCropping ? (
+                  <>
+                    <button
+                      onClick={() => {
+                        updateCrop(undefined as any, undefined as any);
+                        setIsCropping(false);
+                      }}
+                      className="flex items-center justify-center w-8 h-8 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-md transition-colors border border-zinc-700"
+                      title="Cancel Crop"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => setIsCropping(false)}
+                      className="flex items-center justify-center w-8 h-8 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md transition-colors"
+                      title="Confirm Crop"
+                    >
+                      <Check className="w-4 h-4" />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onMouseDown={() => setIsComparing(true)}
+                      onMouseUp={() => setIsComparing(false)}
+                      onMouseLeave={() => setIsComparing(false)}
+                      onTouchStart={() => setIsComparing(true)}
+                      onTouchEnd={() => setIsComparing(false)}
+                      disabled={!selectedImage || compareMode === 'split'}
+                      className="flex items-center justify-center w-8 h-8 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 rounded-md transition-colors border border-zinc-800 select-none disabled:opacity-50"
+                      title="Hold to Compare"
+                    >
+                      <SplitSquareHorizontal className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => setCompareMode(prev => prev === 'split' ? 'none' : 'split')}
+                      disabled={!selectedImage}
+                      className={`flex items-center justify-center w-8 h-8 rounded-md transition-colors border select-none disabled:opacity-50 ${
+                        compareMode === 'split' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-zinc-800'
+                      }`}
+                      title="Split View"
+                    >
+                      <Layers className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={handleDownload}
+                      disabled={!selectedImage}
+                      className="flex items-center justify-center w-8 h-8 bg-indigo-600 hover:bg-indigo-700 disabled:bg-zinc-800 disabled:text-zinc-500 text-white rounded-md transition-colors"
+                      title="Save Current"
+                    >
+                      <Download className="w-4 h-4" />
+                    </button>
+                  </>
+                )}
               </div>
-            )}
-          </div>
-          <div className="flex items-center gap-4">
-            {isCropping ? (
-              <>
-                <button
-                  onClick={() => {
-                    updateCrop(undefined as any, undefined as any);
-                    setIsCropping(false);
-                  }}
-                  className="flex items-center gap-2 px-4 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-md transition-colors text-sm font-medium border border-zinc-700"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => setIsCropping(false)}
-                  className="flex items-center gap-2 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md transition-colors text-sm font-medium"
-                >
-                  Confirm Crop
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  onMouseDown={() => setIsComparing(true)}
-                  onMouseUp={() => setIsComparing(false)}
-                  onMouseLeave={() => setIsComparing(false)}
-                  onTouchStart={() => setIsComparing(true)}
-                  onTouchEnd={() => setIsComparing(false)}
-                  disabled={!selectedImage}
-                  className="flex items-center gap-2 px-4 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 rounded-md transition-colors text-sm font-medium border border-zinc-800 select-none disabled:opacity-50"
-                >
-                  <SplitSquareHorizontal className="w-4 h-4" />
-                  Hold to Compare
-                </button>
-                <button
-                  onClick={handleDownload}
-                  disabled={!selectedImage}
-                  className="flex items-center gap-2 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-zinc-800 disabled:text-zinc-500 text-white rounded-md transition-colors text-sm font-medium"
-                >
-                  <Download className="w-4 h-4" />
-                  Save Current
-                </button>
-              </>
-            )}
-          </div>
-        </div>
+            </div>
 
-        {/* Canvas Container */}
-        <div className={`flex-1 overflow-auto flex items-center justify-center p-8 ${zoomMode === 'original' ? 'cursor-move' : ''}`}>
-          {!selectedImage ? (
-            <div className="text-center text-zinc-500">
-              <ImageIcon className="w-16 h-16 mx-auto mb-4 opacity-20" />
-              <p>Select or upload an image to start processing</p>
+            {/* Canvas Container */}
+            <div className="flex-1 min-h-0 flex items-center justify-center p-4 md:p-8 overflow-hidden bg-zinc-950 relative">
+              {isDragging && (
+                <div className="absolute inset-0 z-50 bg-indigo-500/20 backdrop-blur-sm border-2 border-indigo-500 border-dashed m-4 rounded-xl flex items-center justify-center">
+                  <div className="bg-zinc-900 p-6 rounded-2xl shadow-2xl flex flex-col items-center gap-4">
+                    <Upload className="w-12 h-12 text-indigo-400 animate-bounce" />
+                    <p className="text-lg font-medium text-zinc-200">Drop images here to import</p>
+                  </div>
+                </div>
+              )}
+              {isUploading && (
+                <div className="absolute inset-0 z-50 bg-zinc-950/80 backdrop-blur-sm flex items-center justify-center">
+                  <div className="bg-zinc-900 p-8 rounded-2xl shadow-2xl flex flex-col items-center gap-6 w-80">
+                    <div className="w-16 h-16 border-4 border-zinc-800 border-t-indigo-500 rounded-full animate-spin"></div>
+                    <div className="w-full space-y-2 text-center">
+                      <p className="text-lg font-medium text-zinc-200">Importing Images...</p>
+                      <div className="w-full h-2 bg-zinc-800 rounded-full overflow-hidden">
+                        <div 
+                          className="h-full bg-indigo-500 transition-all duration-300 ease-out"
+                          style={{ width: `${uploadProgress}%` }}
+                        ></div>
+                      </div>
+                      <p className="text-sm text-zinc-400">{uploadProgress}%</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+              <TransformComponent wrapperClass="w-full h-full flex items-center justify-center" contentClass="w-full h-full flex items-center justify-center">
+                {!selectedImage ? (
+                  <div className="text-center text-zinc-500">
+                    <ImageIcon className="w-16 h-16 mx-auto mb-4 opacity-20" />
+                    <p>Select or upload an image to start processing</p>
+                    <p className="text-sm mt-2 opacity-60">You can also drag and drop images here</p>
+                  </div>
+                ) : (
+                  <div className="relative flex items-center justify-center w-full h-full">
+                    <ReactCrop 
+                      crop={selectedImage.crop} 
+                      onChange={(c, pc) => updateCrop(c, pc)}
+                      className="max-w-full max-h-full"
+                      disabled={!isCropping}
+                      locked={!isCropping}
+                      style={{ display: isCropping ? 'block' : 'none' }}
+                      ruleOfThirds={true}
+                      aspect={selectedImage.cropAspect}
+                    >
+                      <canvas
+                        ref={isCropping ? canvasRef : null}
+                        className="max-w-full max-h-full w-auto h-auto object-contain shadow-2xl rounded-sm"
+                        style={{ backgroundImage: 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyEgSRC0AQAK9CGVG3UW0AAAAABJRU5ErkJggg==")' }}
+                      />
+                    </ReactCrop>
+                    <canvas
+                      ref={!isCropping ? canvasRef : null}
+                      className="max-w-full max-h-full w-auto h-auto object-contain shadow-2xl rounded-sm"
+                      style={{ display: isCropping ? 'none' : 'block', backgroundImage: 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyEgSRC0AQAK9CGVG3UW0AAAAABJRU5ErkJggg==")' }}
+                    />
+                    {compareMode === 'split' && !isCropping && (
+                      <>
+                        <canvas
+                          ref={originalCanvasRef}
+                          className="absolute max-w-full max-h-full w-auto h-auto object-contain shadow-2xl rounded-sm pointer-events-none"
+                          style={{ 
+                            clipPath: `inset(0 ${100 - splitPosition}% 0 0)`,
+                            backgroundImage: 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyEgSRC0AQAK9CGVG3UW0AAAAABJRU5ErkJggg==")' 
+                          }}
+                        />
+                        <div 
+                          className="absolute top-0 bottom-0 w-1 bg-white cursor-ew-resize shadow-[0_0_4px_rgba(0,0,0,0.5)] z-10 flex items-center justify-center"
+                          style={{ left: `${splitPosition}%`, transform: 'translateX(-50%)' }}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const container = e.currentTarget.parentElement;
+                            if (!container) return;
+                            
+                            const handleMouseMove = (moveEvent: MouseEvent) => {
+                              const rect = container.getBoundingClientRect();
+                              const x = Math.max(0, Math.min(moveEvent.clientX - rect.left, rect.width));
+                              setSplitPosition((x / rect.width) * 100);
+                            };
+                            const handleMouseUp = () => {
+                              document.removeEventListener('mousemove', handleMouseMove);
+                              document.removeEventListener('mouseup', handleMouseUp);
+                            };
+                            document.addEventListener('mousemove', handleMouseMove);
+                            document.addEventListener('mouseup', handleMouseUp);
+                          }}
+                          onTouchStart={(e) => {
+                            e.stopPropagation();
+                            const container = e.currentTarget.parentElement;
+                            if (!container) return;
+                            
+                            const handleTouchMove = (moveEvent: TouchEvent) => {
+                              const rect = container.getBoundingClientRect();
+                              const x = Math.max(0, Math.min(moveEvent.touches[0].clientX - rect.left, rect.width));
+                              setSplitPosition((x / rect.width) * 100);
+                            };
+                            const handleTouchEnd = () => {
+                              document.removeEventListener('touchmove', handleTouchMove);
+                              document.removeEventListener('touchend', handleTouchEnd);
+                            };
+                            document.addEventListener('touchmove', handleTouchMove, { passive: false });
+                            document.addEventListener('touchend', handleTouchEnd);
+                          }}
+                        >
+                          <div className="w-6 h-6 bg-white rounded-full shadow-md flex items-center justify-center pointer-events-none">
+                            <div className="w-4 h-4 text-zinc-800">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M8 9l-4 3 4 3M16 9l4 3-4 3" />
+                              </svg>
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </TransformComponent>
             </div>
-          ) : (
-            <div className={`relative flex items-center justify-center ${zoomMode === 'fit' ? 'max-w-full max-h-full' : ''}`}>
-              <ReactCrop 
-                crop={selectedImage.crop} 
-                onChange={(c, pc) => updateCrop(c, pc)}
-                className={zoomMode === 'fit' ? 'max-w-full max-h-full' : ''}
-                disabled={!isCropping}
-                locked={!isCropping}
-                style={{ display: isCropping ? 'block' : 'none' }}
-                ruleOfThirds={true}
-                aspect={selectedImage.cropAspect}
-              >
-                <canvas
-                  ref={isCropping ? canvasRef : null}
-                  className={`${zoomMode === 'fit' ? 'max-w-full max-h-full object-contain' : ''} shadow-2xl rounded-sm`}
-                  style={{ backgroundImage: 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyEgSRC0AQAK9CGVG3UW0AAAAABJRU5ErkJggg==")' }}
-                />
-              </ReactCrop>
-              <canvas
-                ref={!isCropping ? canvasRef : null}
-                className={`${zoomMode === 'fit' ? 'max-w-full max-h-full object-contain' : ''} shadow-2xl rounded-sm`}
-                style={{ display: isCropping ? 'none' : 'block', backgroundImage: 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyEgSRC0AQAK9CGVG3UW0AAAAABJRU5ErkJggg==")' }}
-              />
-            </div>
-          )}
-        </div>
-      </div>
+          </div>
+        )}
+      </TransformWrapper>
 
       {/* Right Sidebar: Adjustments */}
-      <div className="w-80 bg-zinc-900 border-l border-zinc-800 flex flex-col overflow-y-auto">
-        {/* Histogram */}
-        <div className="p-4 border-b border-zinc-800">
+      <div className="w-80 bg-zinc-900 border-l border-zinc-800 flex flex-col h-screen">
+        {/* Histogram - Fixed at top */}
+        <div className="p-4 border-b border-zinc-800 bg-zinc-900 z-10">
           <Histogram data={histogramData} />
         </div>
 
-        {/* Adjustments Panel */}
-        <div className="p-6 space-y-8 flex-1">
-          {/* Film Type & Auto Mask (Always visible) */}
-          <div className="space-y-4">
+        {/* Scrollable Content */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="p-6 space-y-8">
+            {/* Export Settings Section */}
+            <div className="space-y-4">
+              <button 
+                onClick={() => setIsExportSettingsOpen(!isExportSettingsOpen)}
+                className="flex items-center justify-between w-full text-sm font-medium text-zinc-300 hover:text-zinc-100 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <Download className="w-4 h-4" />
+                  Export Settings
+                </div>
+                {isExportSettingsOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              </button>
+
+              {isExportSettingsOpen && (
+                <div className="space-y-4 p-4 rounded-xl bg-zinc-800/30 border border-zinc-800 animate-in fade-in slide-in-from-top-2 duration-200">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Format</label>
+                    <div className="grid grid-cols-3 gap-1">
+                      {(['image/jpeg', 'image/png', 'image/webp'] as const).map((f) => (
+                        <button
+                          key={f}
+                          onClick={() => setExportConfig(prev => ({ ...prev, format: f }))}
+                          className={`px-2 py-1.5 text-[10px] font-medium rounded-md transition-colors ${
+                            exportConfig.format === f
+                              ? 'bg-indigo-600 text-white'
+                              : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+                          }`}
+                        >
+                          {f.split('/')[1].toUpperCase()}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {(exportConfig.format === 'image/jpeg' || exportConfig.format === 'image/webp') && (
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Quality</label>
+                        <span className="text-[10px] font-mono text-indigo-400">{Math.round(exportConfig.quality * 100)}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.1"
+                        max="1.0"
+                        step="0.01"
+                        value={exportConfig.quality}
+                        onChange={(e) => setExportConfig(prev => ({ ...prev, quality: parseFloat(e.target.value) }))}
+                        className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Film Type & Auto Mask (Always visible) */}
+            <div className="space-y-4">
             <div className="space-y-3">
               <label className="text-sm font-medium text-zinc-300 flex items-center gap-2">
                 <Sliders className="w-4 h-4" />
                 Film Type
               </label>
               <div className="grid grid-cols-3 gap-2">
-                {(['color_neg', 'bw_neg', 'positive'] as FilmType[]).map((type) => (
+                {(['color_neg', 'bw_neg', 'log'] as FilmType[]).map((type) => (
                   <button
                     key={type}
                     onClick={() => updateAdjustments({ filmType: type })}
@@ -588,7 +868,7 @@ export default function App() {
                         : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'
                     }`}
                   >
-                    {type === 'color_neg' ? 'Color Neg' : type === 'bw_neg' ? 'B&W Neg' : 'Positive'}
+                    {type === 'color_neg' ? 'Color Neg' : type === 'bw_neg' ? 'B&W Neg' : 'Log'}
                   </button>
                 ))}
               </div>
@@ -611,7 +891,7 @@ export default function App() {
                   {FILM_PRESETS.map(preset => (
                     <button
                       key={preset.id}
-                      onClick={() => updateAdjustments({ ...defaultAdjustments, ...preset.adjustments })}
+                      onClick={() => updateAdjustments({ ...defaultAdjustments, ...preset.adjustments, rotation: adjustments.rotation })}
                       className="text-left p-2 rounded-lg bg-zinc-800/50 hover:bg-zinc-800 border border-zinc-700/50 hover:border-zinc-600 transition-all group"
                     >
                       <p className="text-xs font-semibold text-zinc-200 group-hover:text-indigo-400 transition-colors">{preset.name}</p>
@@ -651,18 +931,30 @@ export default function App() {
                   )}
                 </label>
                 
-                {!adjustments.lut ? (
-                  <label className="flex items-center justify-center gap-2 w-full py-8 px-4 border-2 border-dashed border-zinc-700 hover:border-indigo-500 bg-zinc-800/50 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-300 rounded-lg transition-colors cursor-pointer">
-                    <Upload className="w-5 h-5" />
-                    <span className="text-sm font-medium">Upload .cube file</span>
-                    <input type="file" accept=".cube" className="hidden" onChange={handleLutUpload} />
-                  </label>
-                ) : (
-                  <div className="p-4 bg-zinc-800 rounded-lg border border-zinc-700 flex items-center justify-between">
-                    <span className="text-sm font-medium text-zinc-200 truncate pr-4">{adjustments.lut.name}</span>
-                    <span className="text-xs text-zinc-500 shrink-0">{adjustments.lut.size}³</span>
+                {availableLuts.length > 0 && (
+                  <div className="grid grid-cols-1 gap-2 mb-3 max-h-40 overflow-y-auto pr-1">
+                    {availableLuts.map((lut, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => updateAdjustments({ lut })}
+                        className={`text-left p-2 rounded-lg border transition-all flex items-center justify-between ${
+                          adjustments.lut?.name === lut.name
+                            ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300'
+                            : 'bg-zinc-800/50 border-zinc-700/50 hover:bg-zinc-800 hover:border-zinc-600 text-zinc-300'
+                        }`}
+                      >
+                        <span className="text-xs font-medium truncate pr-2">{lut.name}</span>
+                        <span className="text-[10px] opacity-50 shrink-0">{lut.size}³</span>
+                      </button>
+                    ))}
                   </div>
                 )}
+
+                <label className="flex items-center justify-center gap-2 w-full py-3 px-4 border-2 border-dashed border-zinc-700 hover:border-indigo-500 bg-zinc-800/50 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-300 rounded-lg transition-colors cursor-pointer">
+                  <Upload className="w-4 h-4" />
+                  <span className="text-xs font-medium">Upload .cube file</span>
+                  <input type="file" accept=".cube" className="hidden" onChange={handleLutUpload} />
+                </label>
               </div>
 
               {adjustments.lut && (
@@ -707,11 +999,106 @@ export default function App() {
                 <SliderControl label="Green Offset" icon={<Layers className="w-4 h-4 text-green-400" />} value={adjustments.gOffset} min={-100} max={100} onChange={(v) => updateAdjustments({ gOffset: v })} />
                 <SliderControl label="Blue Offset" icon={<Layers className="w-4 h-4 text-blue-400" />} value={adjustments.bOffset} min={-100} max={100} onChange={(v) => updateAdjustments({ bOffset: v })} />
               </div>
+
+              {/* Color Balance Section */}
+              <div className="pt-6 border-t border-zinc-800/50 space-y-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Color Balance</p>
+                  <div className="flex bg-zinc-800 rounded-md p-0.5">
+                    {(['shadows', 'midtones', 'highlights'] as const).map((r) => (
+                      <button
+                        key={r}
+                        onClick={() => setColorBalanceRange(r)}
+                        className={`px-3 py-1 text-[10px] font-bold uppercase tracking-tighter rounded transition-colors ${
+                          colorBalanceRange === r ? 'bg-zinc-700 text-indigo-400' : 'text-zinc-500 hover:text-zinc-300'
+                        }`}
+                      >
+                        {r === 'shadows' ? 'Shadows' : r === 'midtones' ? 'Midtones' : 'Highlights'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-4 bg-zinc-950/30 p-3 rounded-xl border border-zinc-800/50">
+                  <SliderControl 
+                    label="Cyan - Red" 
+                    icon={<div className="w-3 h-3 rounded-full bg-red-500" />} 
+                    value={adjustments.colorBalance[colorBalanceRange].r} 
+                    min={-50} max={50} 
+                    onChange={(v) => updateColorBalance(colorBalanceRange, 'r', v)} 
+                  />
+                  <SliderControl 
+                    label="Magenta - Green" 
+                    icon={<div className="w-3 h-3 rounded-full bg-green-500" />} 
+                    value={adjustments.colorBalance[colorBalanceRange].g} 
+                    min={-50} max={50} 
+                    onChange={(v) => updateColorBalance(colorBalanceRange, 'g', v)} 
+                  />
+                  <SliderControl 
+                    label="Yellow - Blue" 
+                    icon={<div className="w-3 h-3 rounded-full bg-blue-500" />} 
+                    value={adjustments.colorBalance[colorBalanceRange].b} 
+                    min={-50} max={50} 
+                    onChange={(v) => updateColorBalance(colorBalanceRange, 'b', v)} 
+                  />
+                  
+                  <div className="pt-2 flex items-center justify-between border-t border-zinc-800/50 mt-2">
+                    <label className="flex items-center gap-2 cursor-pointer group">
+                      <input 
+                        type="checkbox" 
+                        checked={adjustments.colorBalance.preserveLuminosity}
+                        onChange={(e) => updateAdjustments({ 
+                          colorBalance: { ...adjustments.colorBalance, preserveLuminosity: e.target.checked } 
+                        })}
+                        className="w-3.5 h-3.5 rounded border-zinc-700 bg-zinc-800 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-zinc-900"
+                      />
+                      <span className="text-[10px] font-medium text-zinc-500 group-hover:text-zinc-300 transition-colors">Preserve Luminosity</span>
+                    </label>
+                    <button 
+                      onClick={() => {
+                        const currentCB = { ...adjustments.colorBalance };
+                        currentCB[colorBalanceRange] = { r: 0, g: 0, b: 0 };
+                        updateAdjustments({ colorBalance: currentCB });
+                      }}
+                      className="text-[10px] font-bold text-zinc-600 hover:text-red-400 transition-colors uppercase tracking-tighter"
+                    >
+                      Reset {colorBalanceRange[0].toUpperCase() + colorBalanceRange.slice(1)}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Detail Section */}
+              <div className="pt-6 border-t border-zinc-800/50 space-y-6">
+                <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Detail</p>
+                <SliderControl 
+                  label="Sharpen" 
+                  icon={<Zap className="w-4 h-4 text-amber-400" />} 
+                  value={adjustments.sharpen} 
+                  min={0} max={100} 
+                  onChange={(v) => updateAdjustments({ sharpen: v })} 
+                />
+                <SliderControl 
+                  label="Clarity" 
+                  icon={<Wind className="w-4 h-4 text-sky-400" />} 
+                  value={adjustments.clarity} 
+                  min={-100} max={100} 
+                  onChange={(v) => updateAdjustments({ clarity: v })} 
+                />
+                <SliderControl 
+                  label="Color NR" 
+                  icon={<Shield className="w-4 h-4 text-emerald-400" />} 
+                  value={adjustments.colorNoiseReduction} 
+                  min={0} max={100} 
+                  onChange={(v) => updateAdjustments({ colorNoiseReduction: v })} 
+                />
+              </div>
             </div>
           </div>
         </div>
+      </div>
         
-        <div className="p-6 border-t border-zinc-800">
+      <div className="p-6 border-t border-zinc-800">
           <button
             onClick={() => updateAdjustments(defaultAdjustments)}
             disabled={!selectedImage}

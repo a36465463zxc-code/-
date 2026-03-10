@@ -106,15 +106,21 @@ export function calculateHistogram(imageData: ImageData) {
   const r = new Array(256).fill(0);
   const g = new Array(256).fill(0);
   const b = new Array(256).fill(0);
+  const l = new Array(256).fill(0);
   
   const data = imageData.data;
   for (let i = 0; i < data.length; i += 4) {
-    r[data[i]]++;
-    g[data[i+1]]++;
-    b[data[i+2]]++;
+    const rv = data[i];
+    const gv = data[i+1];
+    const bv = data[i+2];
+    r[rv]++;
+    g[gv]++;
+    b[bv]++;
+    const lum = Math.round(0.299 * rv + 0.587 * gv + 0.114 * bv);
+    l[lum]++;
   }
   
-  return { r, g, b };
+  return { r, g, b, l };
 }
 
 export function processImageData(
@@ -128,7 +134,7 @@ export function processImageData(
   const dstData = dstImageData.data;
   const { filmType, autoMask, exposure, temperature, tint, contrast, saturation, rOffset, gOffset, bOffset, shadows, highlights, whites, blacks, gamma } = adjustments;
 
-  const isNeg = filmType === 'color_neg' || filmType === 'bw_neg';
+  const isNeg = filmType === 'color_neg' || filmType === 'bw_neg' || filmType === 'log';
   const isBW = filmType === 'bw_neg';
 
   const c = contrast;
@@ -141,6 +147,14 @@ export function processImageData(
   const whiteFactor = whites / 100;
   const blackFactor = blacks / 100;
   const gammaValue = gamma / 100;
+
+  const applyLogCurve = (v: number) => {
+    let x = v / 255;
+    // A log curve that lifts shadows and compresses highlights to create a "flat" gray film look
+    const logBase = 20;
+    x = Math.log(1 + logBase * x) / Math.log(1 + logBase);
+    return x * 255;
+  };
 
   for (let i = 0; i < srcData.length; i += 4) {
     let r = srcData[i];
@@ -225,6 +239,13 @@ export function processImageData(
       b = lum + satMult * (b - lum);
     }
 
+    // Apply Log Curve
+    if (filmType === 'log') {
+      r = applyLogCurve(r);
+      g = applyLogCurve(g);
+      b = applyLogCurve(b);
+    }
+
     // 8. LUT
     const lutIntensity = adjustments.lutIntensity ?? 100;
     if (adjustments.lut && lutIntensity > 0) {
@@ -286,11 +307,134 @@ export function processImageData(
       b = b * (1 - intensity) + lb * intensity;
     }
 
+    // 9. Color Balance
+    const cb = adjustments.colorBalance;
+    if (cb) {
+      const oldLum = 0.299 * r + 0.587 * g + 0.114 * b;
+      const lum = Math.max(0, Math.min(1, oldLum / 255));
+      
+      // Smoother weights using power curves
+      const shadowWeight = Math.pow(Math.max(0, 1 - lum * 1.5), 1.5);
+      const highlightWeight = Math.pow(Math.max(0, (lum - 0.33) * 1.5), 1.5);
+      const midtoneWeight = Math.max(0, 1 - shadowWeight - highlightWeight);
+      
+      r += cb.shadows.r * shadowWeight + cb.midtones.r * midtoneWeight + cb.highlights.r * highlightWeight;
+      g += cb.shadows.g * shadowWeight + cb.midtones.g * midtoneWeight + cb.highlights.g * highlightWeight;
+      b += cb.shadows.b * shadowWeight + cb.midtones.b * midtoneWeight + cb.highlights.b * highlightWeight;
+
+      if (cb.preserveLuminosity) {
+        const newLum = 0.299 * r + 0.587 * g + 0.114 * b;
+        if (newLum > 0 && oldLum > 0) {
+          const scale = oldLum / newLum;
+          r *= scale;
+          g *= scale;
+          b *= scale;
+        }
+      }
+    }
+
     // Final clamp
     dstData[i] = Math.max(0, Math.min(255, r));
     dstData[i + 1] = Math.max(0, Math.min(255, g));
     dstData[i + 2] = Math.max(0, Math.min(255, b));
     dstData[i + 3] = srcData[i + 3];
+  }
+
+  // 10. Spatial Effects (Sharpen, Clarity, Color Noise Reduction)
+  if (adjustments.sharpen > 0 || adjustments.clarity !== 0 || adjustments.colorNoiseReduction > 0) {
+    const tempData = new Uint8ClampedArray(dstData);
+    const sharpenK = adjustments.sharpen / 100;
+    const clarityK = adjustments.clarity / 100;
+    const nrK = adjustments.colorNoiseReduction / 100;
+
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        const i = (y * width + x) * 4;
+        
+        // Simple 3x3 Sharpening & Clarity
+        if (sharpenK > 0 || clarityK !== 0) {
+          // Kernel for sharpening: [0, -1, 0], [-1, 5, -1], [0, -1, 0]
+          // We'll use a weighted average of neighbors
+          let sumR = 0, sumG = 0, sumB = 0;
+          const neighbors = [
+            ((y - 1) * width + x) * 4,
+            ((y + 1) * width + x) * 4,
+            (y * width + (x - 1)) * 4,
+            (y * width + (x + 1)) * 4
+          ];
+          
+          for (const ni of neighbors) {
+            sumR += tempData[ni];
+            sumG += tempData[ni + 1];
+            sumB += tempData[ni + 2];
+          }
+          
+          const avgR = sumR / 4;
+          const avgG = sumG / 4;
+          const avgB = sumB / 4;
+
+          // Sharpening: boost difference from local average
+          if (sharpenK > 0) {
+            dstData[i] += (dstData[i] - avgR) * sharpenK * 2;
+            dstData[i + 1] += (dstData[i + 1] - avgG) * sharpenK * 2;
+            dstData[i + 2] += (dstData[i + 2] - avgB) * sharpenK * 2;
+          }
+
+          // Clarity: local contrast enhancement (mid-tone boost)
+          if (clarityK !== 0) {
+            const lum = (0.299 * dstData[i] + 0.587 * dstData[i + 1] + 0.114 * dstData[i + 2]) / 255;
+            const midtoneWeight = Math.pow(Math.sin(lum * Math.PI), 2); // Peak at 0.5
+            const diffR = dstData[i] - avgR;
+            const diffG = dstData[i + 1] - avgG;
+            const diffB = dstData[i + 2] - avgB;
+            
+            dstData[i] += diffR * clarityK * midtoneWeight * 1.5;
+            dstData[i + 1] += diffG * clarityK * midtoneWeight * 1.5;
+            dstData[i + 2] += diffB * clarityK * midtoneWeight * 1.5;
+          }
+        }
+
+        // Color Noise Reduction (Chroma Blur)
+        if (nrK > 0) {
+          let sumR = 0, sumG = 0, sumB = 0;
+          // 3x3 box blur for chroma
+          for (let ky = -1; ky <= 1; ky++) {
+            for (let kx = -1; kx <= 1; kx++) {
+              const ni = ((y + ky) * width + (x + kx)) * 4;
+              sumR += tempData[ni];
+              sumG += tempData[ni + 1];
+              sumB += tempData[ni + 2];
+            }
+          }
+          const blurR = sumR / 9;
+          const blurG = sumG / 9;
+          const blurB = sumB / 9;
+
+          // Convert to YUV-ish and apply blur only to UV
+          const r = dstData[i], g = dstData[i + 1], b = dstData[i + 2];
+          const yVal = 0.299 * r + 0.587 * g + 0.114 * b;
+          const u = -0.14713 * r - 0.28886 * g + 0.436 * b;
+          const v = 0.615 * r - 0.51499 * g - 0.10001 * b;
+
+          const bu = -0.14713 * blurR - 0.28886 * blurG + 0.436 * blurB;
+          const bv = 0.615 * blurR - 0.51499 * blurG - 0.10001 * blurB;
+
+          // Blend original UV with blurred UV
+          const finalU = u * (1 - nrK) + bu * nrK;
+          const finalV = v * (1 - nrK) + bv * nrK;
+
+          // Back to RGB
+          dstData[i] = yVal + 1.13983 * finalV;
+          dstData[i + 1] = yVal - 0.39465 * finalU - 0.5806 * finalV;
+          dstData[i + 2] = yVal + 2.03211 * finalU;
+        }
+
+        // Final clamp for spatial effects
+        dstData[i] = Math.max(0, Math.min(255, dstData[i]));
+        dstData[i + 1] = Math.max(0, Math.min(255, dstData[i + 1]));
+        dstData[i + 2] = Math.max(0, Math.min(255, dstData[i + 2]));
+      }
+    }
   }
 
   return dstImageData;

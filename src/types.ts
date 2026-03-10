@@ -1,4 +1,4 @@
-export type FilmType = 'color_neg' | 'bw_neg' | 'positive';
+export type FilmType = 'color_neg' | 'bw_neg' | 'log';
 
 export interface LUT3D {
   name: string;
@@ -25,6 +25,15 @@ export interface Adjustments {
   rotation: number;
   lut: LUT3D | null;
   lutIntensity: number;
+  colorBalance: {
+    shadows: { r: number; g: number; b: number };
+    midtones: { r: number; g: number; b: number };
+    highlights: { r: number; g: number; b: number };
+    preserveLuminosity: boolean;
+  };
+  sharpen: number;
+  clarity: number;
+  colorNoiseReduction: number;
 }
 
 export const defaultAdjustments: Adjustments = {
@@ -46,6 +55,15 @@ export const defaultAdjustments: Adjustments = {
   rotation: 0,
   lut: null,
   lutIntensity: 100,
+  colorBalance: {
+    shadows: { r: 0, g: 0, b: 0 },
+    midtones: { r: 0, g: 0, b: 0 },
+    highlights: { r: 0, g: 0, b: 0 },
+    preserveLuminosity: true,
+  },
+  sharpen: 0,
+  clarity: 0,
+  colorNoiseReduction: 0,
 };
 
 export interface ImageItem {
