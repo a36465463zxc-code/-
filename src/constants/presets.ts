@@ -21,7 +21,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       contrast: 5,
       highlights: -5,
       shadows: 5,
-      halationIntensity: 0
+      halationIntensity: 0,
+      vignette: 0
     }
   },
   {
@@ -35,7 +36,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       saturation: 4,
       contrast: -5,
       highlights: 5,
-      halationIntensity: 0
+      halationIntensity: 0,
+      vignette: 0
     }
   },
   {
@@ -48,7 +50,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       tint: -2,
       saturation: 15,
       contrast: 10,
-      halationIntensity: 0
+      halationIntensity: 0,
+      vignette: 0
     }
   },
   {
@@ -61,7 +64,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       saturation: 25,
       contrast: 18,
       highlights: -8,
-      halationIntensity: 0
+      halationIntensity: 0,
+      vignette: 0
     }
   },
   {
@@ -75,7 +79,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       saturation: 12,
       contrast: 8,
       shadows: -2,
-      halationIntensity: 0
+      halationIntensity: 0,
+      vignette: 0
     }
   },
   {
@@ -88,7 +93,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       tint: 5,
       saturation: 2,
       contrast: 4,
-      halationIntensity: 0
+      halationIntensity: 0,
+      vignette: 0
     }
   },
   {
@@ -101,7 +107,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       tint: 4,
       saturation: 5,
       contrast: 6,
-      halationIntensity: 0
+      halationIntensity: 0,
+      vignette: 0
     }
   },
   // Black & White
@@ -115,7 +122,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       shadows: -15,
       highlights: 10,
       exposure: 5,
-      halationIntensity: 0
+      halationIntensity: 0,
+      vignette: 0
     }
   },
   {
@@ -127,7 +135,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       contrast: 12,
       shadows: 5,
       highlights: -2,
-      halationIntensity: 0
+      halationIntensity: 0,
+      vignette: 0
     }
   },
   // Motion Picture Film
@@ -141,7 +150,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       tint: 5,
       contrast: 8,
       saturation: 5,
-      halationIntensity: 0
+      halationIntensity: 0,
+      vignette: 0
     }
   },
   {
@@ -154,7 +164,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       tint: -2,
       contrast: 12,
       saturation: 10,
-      halationIntensity: 0
+      halationIntensity: 0,
+      vignette: 0
     }
   },
   {
@@ -167,7 +178,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       tint: 0,
       contrast: 10,
       saturation: 8,
-      halationIntensity: 0
+      halationIntensity: 0,
+      vignette: 0
     }
   },
   {
@@ -180,7 +192,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       tint: 4,
       contrast: 9,
       saturation: 6,
-      halationIntensity: 0
+      halationIntensity: 0,
+      vignette: 0
     }
   },
   {
@@ -195,7 +208,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       saturation: 12,
       halationIntensity: 45,
       halationRadius: 15,
-      halationThreshold: 70
+      halationThreshold: 70,
+      vignette: 0
     }
   },
   {
@@ -210,7 +224,8 @@ export const FILM_PRESETS: FilmPreset[] = [
       saturation: 10,
       halationIntensity: 30,
       halationRadius: 12,
-      halationThreshold: 75
+      halationThreshold: 75,
+      vignette: 0
     }
   }
 ];

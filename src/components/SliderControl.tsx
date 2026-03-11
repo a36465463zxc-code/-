@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { RotateCcw } from 'lucide-react';
 
 interface SliderControlProps {
@@ -23,6 +23,40 @@ export function SliderControl({
   onChange 
 }: SliderControlProps) {
   const isChanged = value !== defaultValue;
+  const [isEditing, setIsEditing] = useState(false);
+  const [inputValue, setInputValue] = useState(value.toString());
+
+  useEffect(() => {
+    if (!isEditing) {
+      setInputValue(value > 0 ? `+${value}` : value.toString());
+    }
+  }, [value, isEditing]);
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setInputValue(e.target.value);
+  };
+
+  const handleInputBlur = () => {
+    setIsEditing(false);
+    let parsed = parseFloat(inputValue);
+    if (isNaN(parsed)) {
+      parsed = value;
+    } else {
+      parsed = Math.max(min, Math.min(max, parsed));
+      if (step) {
+        const inv = 1.0 / step;
+        parsed = Math.round(parsed * inv) / inv;
+      }
+    }
+    onChange(parsed);
+    setInputValue(parsed > 0 ? `+${parsed}` : parsed.toString());
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.currentTarget.blur();
+    }
+  };
 
   return (
     <div className="group space-y-3">
@@ -43,9 +77,18 @@ export function SliderControl({
               <RotateCcw className="w-3 h-3" />
             </button>
           )}
-          <span className="text-xs font-mono font-medium text-zinc-300 min-w-[3ch] text-right">
-            {value > 0 ? `+${value}` : value}
-          </span>
+          <input
+            type="text"
+            value={isEditing ? inputValue : (value > 0 ? `+${value}` : value)}
+            onChange={handleInputChange}
+            onFocus={() => {
+              setIsEditing(true);
+              setInputValue(value.toString());
+            }}
+            onBlur={handleInputBlur}
+            onKeyDown={handleKeyDown}
+            className="w-12 text-xs font-mono font-medium text-zinc-300 bg-transparent border-b border-transparent hover:border-zinc-600 focus:border-indigo-500 focus:outline-none text-right transition-colors"
+          />
         </div>
       </div>
       

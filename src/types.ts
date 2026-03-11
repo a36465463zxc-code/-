@@ -1,4 +1,4 @@
-export type FilmType = 'color_neg' | 'bw_neg' | 'log';
+export type FilmType = 'color_neg' | 'bw_neg' | 'log' | 'positive';
 
 export interface LUT3D {
   name: string;
@@ -37,6 +37,7 @@ export interface Adjustments {
   halationIntensity: number;
   halationRadius: number;
   halationThreshold: number;
+  vignette: number;
 }
 
 export const defaultAdjustments: Adjustments = {
@@ -70,6 +71,7 @@ export const defaultAdjustments: Adjustments = {
   halationIntensity: 0,
   halationRadius: 10,
   halationThreshold: 80,
+  vignette: 0,
 };
 
 export interface ImageItem {

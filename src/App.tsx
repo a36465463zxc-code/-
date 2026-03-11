@@ -24,7 +24,7 @@ export default function App() {
   const [isCropping, setIsCropping] = useState(false);
   const [isPresetsOpen, setIsPresetsOpen] = useState(false);
   const [exportConfig, setExportConfig] = useState({
-    format: 'image/jpeg' as 'image/jpeg' | 'image/png' | 'image/webp',
+    format: 'image/jpeg' as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/tiff',
     quality: 0.95,
   });
   const [isExportSettingsOpen, setIsExportSettingsOpen] = useState(false);
@@ -32,6 +32,14 @@ export default function App() {
   const [colorBalanceRange, setColorBalanceRange] = useState<'shadows' | 'midtones' | 'highlights'>('midtones');
   const [availableLuts, setAvailableLuts] = useState<LUT3D[]>([]);
   const [mobileView, setMobileView] = useState<'gallery' | 'preview' | 'adjust'>('preview');
+  const [sectionsOpen, setSectionsOpen] = useState({
+    lut: true,
+    basic: true,
+    color: true,
+    colorBalance: true,
+    detail: true,
+    halation: true,
+  });
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const originalCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -121,7 +129,7 @@ export default function App() {
             const imgd = ctx.createImageData(w, h);
             for (let k = 0; k < rgba.length; k++) imgd.data[k] = rgba[k];
             ctx.putImageData(imgd, 0, 0);
-            src = cnv.toDataURL("image/jpeg", 0.95);
+            src = cnv.toDataURL("image/png");
           }
         } catch (err) {
           console.error("Error decoding TIFF/RAW:", err);
@@ -384,10 +392,23 @@ export default function App() {
       : canvasRef.current;
       
     const link = document.createElement('a');
-    const extension = exportConfig.format.split('/')[1];
+    const extension = exportConfig.format === 'image/tiff' ? 'tiff' : exportConfig.format.split('/')[1];
     link.download = `processed-${selectedImage.name}.${extension}`;
-    link.href = finalCanvas.toDataURL(exportConfig.format, exportConfig.quality);
-    link.click();
+    
+    if (exportConfig.format === 'image/tiff') {
+      const ctx = finalCanvas.getContext('2d');
+      if (ctx) {
+        const imgData = ctx.getImageData(0, 0, finalCanvas.width, finalCanvas.height);
+        const tiffBuffer = UTIF.encodeImage(new Uint8Array(imgData.data.buffer), finalCanvas.width, finalCanvas.height);
+        const blob = new Blob([tiffBuffer], { type: 'image/tiff' });
+        link.href = URL.createObjectURL(blob);
+        link.click();
+        URL.revokeObjectURL(link.href);
+      }
+    } else {
+      link.href = finalCanvas.toDataURL(exportConfig.format, exportConfig.quality);
+      link.click();
+    }
   };
 
   const handleBatchDownload = async () => {
@@ -429,10 +450,21 @@ export default function App() {
        ctx.putImageData(processedData, 0, 0);
        
        const finalCanvas = imgItem.crop ? getCroppedCanvas(canvas, imgItem.crop as Crop) : canvas;
+       const extension = exportConfig.format === 'image/tiff' ? 'tiff' : exportConfig.format.split('/')[1];
        
-       const blob = await new Promise<Blob | null>(resolve => finalCanvas.toBlob(resolve, exportConfig.format, exportConfig.quality));
-       if (blob) {
-         zip.file(`processed-${imgItem.name}.${exportConfig.format.split('/')[1]}`, blob);
+       if (exportConfig.format === 'image/tiff') {
+         const finalCtx = finalCanvas.getContext('2d');
+         if (finalCtx) {
+           const imgData = finalCtx.getImageData(0, 0, finalCanvas.width, finalCanvas.height);
+           const tiffBuffer = UTIF.encodeImage(new Uint8Array(imgData.data.buffer), finalCanvas.width, finalCanvas.height);
+           const blob = new Blob([tiffBuffer], { type: 'image/tiff' });
+           zip.file(`processed-${imgItem.name}.${extension}`, blob);
+         }
+       } else {
+         const blob = await new Promise<Blob | null>(resolve => finalCanvas.toBlob(resolve, exportConfig.format, exportConfig.quality));
+         if (blob) {
+           zip.file(`processed-${imgItem.name}.${extension}`, blob);
+         }
        }
     }
     
@@ -847,8 +879,8 @@ export default function App() {
                 <div className="space-y-4 p-4 rounded-xl bg-zinc-800/30 border border-zinc-800 animate-in fade-in slide-in-from-top-2 duration-200">
                   <div className="space-y-2">
                     <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Format</label>
-                    <div className="grid grid-cols-3 gap-1">
-                      {(['image/jpeg', 'image/png', 'image/webp'] as const).map((f) => (
+                    <div className="grid grid-cols-2 gap-1 lg:grid-cols-4">
+                      {(['image/jpeg', 'image/png', 'image/webp', 'image/tiff'] as const).map((f) => (
                         <button
                           key={f}
                           onClick={() => setExportConfig(prev => ({ ...prev, format: f }))}
@@ -868,7 +900,30 @@ export default function App() {
                     <div className="space-y-2">
                       <div className="flex justify-between items-center">
                         <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Quality</label>
-                        <span className="text-[10px] font-mono text-indigo-400">{Math.round(exportConfig.quality * 100)}%</span>
+                        <div className="flex items-center">
+                          <input
+                            type="text"
+                            value={Math.round(exportConfig.quality * 100)}
+                            onChange={(e) => {
+                              if (e.target.value === '') {
+                                setExportConfig(prev => ({ ...prev, quality: 0 }));
+                                return;
+                              }
+                              const val = parseInt(e.target.value);
+                              if (!isNaN(val)) {
+                                setExportConfig(prev => ({ ...prev, quality: val / 100 }));
+                              }
+                            }}
+                            onBlur={() => {
+                              setExportConfig(prev => ({ 
+                                ...prev, 
+                                quality: Math.max(0.1, Math.min(1.0, prev.quality)) 
+                              }));
+                            }}
+                            className="w-8 text-[10px] font-mono text-indigo-400 bg-transparent border-b border-transparent hover:border-zinc-600 focus:border-indigo-500 focus:outline-none text-right transition-colors"
+                          />
+                          <span className="text-[10px] font-mono text-indigo-400">%</span>
+                        </div>
                       </div>
                       <input
                         type="range"
@@ -892,18 +947,18 @@ export default function App() {
                 <Sliders className="w-4 h-4" />
                 Film Type
               </label>
-              <div className="grid grid-cols-3 gap-2">
-                {(['color_neg', 'bw_neg', 'log'] as FilmType[]).map((type) => (
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                {(['color_neg', 'bw_neg', 'log', 'positive'] as FilmType[]).map((type) => (
                   <button
                     key={type}
                     onClick={() => updateAdjustments({ filmType: type })}
-                    className={`px-2 py-2 text-xs font-medium rounded-lg transition-colors ${
+                    className={`px-2 py-2 text-[10px] lg:text-xs font-medium rounded-lg transition-colors ${
                       adjustments.filmType === type
                         ? 'bg-indigo-600 text-white'
                         : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'
                     }`}
                   >
-                    {type === 'color_neg' ? 'Color Neg' : type === 'bw_neg' ? 'B&W Neg' : 'Log'}
+                    {type === 'color_neg' ? 'Color Neg' : type === 'bw_neg' ? 'B&W Neg' : type === 'log' ? 'Log' : 'Positive'}
                   </button>
                 ))}
               </div>
@@ -937,86 +992,119 @@ export default function App() {
               )}
             </div>
 
-            <div className="flex items-center justify-between pt-2 border-t border-zinc-800/50">
-              <label className="text-sm font-medium text-zinc-300">Auto Remove Mask</label>
-              <button
-                onClick={() => updateAdjustments({ autoMask: !adjustments.autoMask })}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  adjustments.autoMask ? 'bg-indigo-600' : 'bg-zinc-700'
-                }`}
-              >
-                <span
-                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                    adjustments.autoMask ? 'translate-x-6' : 'translate-x-1'
+            {adjustments.filmType !== 'positive' && (
+              <div className="flex items-center justify-between pt-2 border-t border-zinc-800/50">
+                <label className="text-sm font-medium text-zinc-300">Auto Remove Mask</label>
+                <button
+                  onClick={() => updateAdjustments({ autoMask: !adjustments.autoMask })}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                    adjustments.autoMask ? 'bg-indigo-600' : 'bg-zinc-700'
                   }`}
-                />
-              </button>
-            </div>
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      adjustments.autoMask ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+            )}
           </div>
 
-          <div className="border-t border-zinc-800/50 pt-6 space-y-10">
+          <div className="border-t border-zinc-800/50 pt-6 space-y-4">
             {/* LUT Section */}
-            <div className="space-y-6">
-              <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest">LUT</p>
-              <div className="space-y-3">
-                <label className="text-sm font-medium text-zinc-300 flex items-center justify-between">
-                  <span>3D LUT (.cube)</span>
-                  {adjustments.lut && (
-                    <button onClick={() => updateAdjustments({ lut: null })} className="text-xs text-red-400 hover:text-red-300">Remove</button>
-                  )}
-                </label>
-                
-                {availableLuts.length > 0 && (
-                  <div className="grid grid-cols-1 gap-2 mb-3 max-h-40 overflow-y-auto pr-1">
-                    {availableLuts.map((lut, idx) => (
-                      <button
-                        key={idx}
-                        onClick={() => updateAdjustments({ lut })}
-                        className={`text-left p-2 rounded-lg border transition-all flex items-center justify-between ${
-                          adjustments.lut?.name === lut.name
-                            ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300'
-                            : 'bg-zinc-800/50 border-zinc-700/50 hover:bg-zinc-800 hover:border-zinc-600 text-zinc-300'
-                        }`}
-                      >
-                        <span className="text-xs font-medium truncate pr-2">{lut.name}</span>
-                        <span className="text-[10px] opacity-50 shrink-0">{lut.size}³</span>
-                      </button>
-                    ))}
+            <div className="space-y-4">
+              <button 
+                onClick={() => setSectionsOpen(prev => ({ ...prev, lut: !prev.lut }))}
+                className="w-full flex items-center justify-between group"
+              >
+                <p className="text-xs font-bold text-zinc-500 group-hover:text-zinc-300 uppercase tracking-widest transition-colors">LUT</p>
+                {sectionsOpen.lut ? <ChevronUp className="w-3 h-3 text-zinc-600" /> : <ChevronDown className="w-3 h-3 text-zinc-600" />}
+              </button>
+              
+              {sectionsOpen.lut && (
+                <div className="space-y-6 animate-in fade-in slide-in-from-top-1 duration-200">
+                  <div className="space-y-3">
+                    <label className="text-sm font-medium text-zinc-300 flex items-center justify-between">
+                      <span>3D LUT (.cube)</span>
+                      {adjustments.lut && (
+                        <button onClick={() => updateAdjustments({ lut: null })} className="text-xs text-red-400 hover:text-red-300">Remove</button>
+                      )}
+                    </label>
+                    
+                    {availableLuts.length > 0 && (
+                      <div className="grid grid-cols-1 gap-2 mb-3 max-h-40 overflow-y-auto pr-1">
+                        {availableLuts.map((lut, idx) => (
+                          <button
+                            key={idx}
+                            onClick={() => updateAdjustments({ lut })}
+                            className={`text-left p-2 rounded-lg border transition-all flex items-center justify-between ${
+                              adjustments.lut?.name === lut.name
+                                ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300'
+                                : 'bg-zinc-800/50 border-zinc-700/50 hover:bg-zinc-800 hover:border-zinc-600 text-zinc-300'
+                            }`}
+                          >
+                            <span className="text-xs font-medium truncate pr-2">{lut.name}</span>
+                            <span className="text-[10px] opacity-50 shrink-0">{lut.size}³</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    <label className="flex items-center justify-center gap-2 w-full py-3 px-4 border-2 border-dashed border-zinc-700 hover:border-indigo-500 bg-zinc-800/50 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-300 rounded-lg transition-colors cursor-pointer">
+                      <Upload className="w-4 h-4" />
+                      <span className="text-xs font-medium">Upload .cube file</span>
+                      <input type="file" accept=".cube" className="hidden" onChange={handleLutUpload} />
+                    </label>
                   </div>
-                )}
 
-                <label className="flex items-center justify-center gap-2 w-full py-3 px-4 border-2 border-dashed border-zinc-700 hover:border-indigo-500 bg-zinc-800/50 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-300 rounded-lg transition-colors cursor-pointer">
-                  <Upload className="w-4 h-4" />
-                  <span className="text-xs font-medium">Upload .cube file</span>
-                  <input type="file" accept=".cube" className="hidden" onChange={handleLutUpload} />
-                </label>
-              </div>
-
-              {adjustments.lut && (
-                <SliderControl label="Intensity" icon={<Layers className="w-4 h-4" />} value={adjustments.lutIntensity ?? 100} min={0} max={100} defaultValue={100} onChange={(v) => updateAdjustments({ lutIntensity: v })} />
+                  {adjustments.lut && (
+                    <SliderControl label="Intensity" icon={<Layers className="w-4 h-4" />} value={adjustments.lutIntensity ?? 100} min={0} max={100} defaultValue={100} onChange={(v) => updateAdjustments({ lutIntensity: v })} />
+                  )}
+                </div>
               )}
             </div>
 
             {/* Basic Section */}
-            <div className="pt-6 border-t border-zinc-800/50 space-y-6">
-              <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Basic</p>
-              <SliderControl label="Exposure" icon={<Sun className="w-4 h-4" />} value={adjustments.exposure} min={-100} max={100} onChange={(v) => updateAdjustments({ exposure: v })} />
-              <SliderControl label="Contrast" icon={<Contrast className="w-4 h-4" />} value={adjustments.contrast} min={-100} max={100} onChange={(v) => updateAdjustments({ contrast: v })} />
-              
-              <div className="grid grid-cols-1 gap-6 pt-2">
-                <SliderControl label="Highlights" icon={<SunDim className="w-4 h-4" />} value={adjustments.highlights} min={-100} max={100} onChange={(v) => updateAdjustments({ highlights: v })} />
-                <SliderControl label="Shadows" icon={<Moon className="w-4 h-4" />} value={adjustments.shadows} min={-100} max={100} onChange={(v) => updateAdjustments({ shadows: v })} />
-                <SliderControl label="Whites" icon={<Sun className="w-4 h-4 text-zinc-400" />} value={adjustments.whites} min={-100} max={100} onChange={(v) => updateAdjustments({ whites: v })} />
-                <SliderControl label="Blacks" icon={<Moon className="w-4 h-4 text-zinc-600" />} value={adjustments.blacks} min={-100} max={100} onChange={(v) => updateAdjustments({ blacks: v })} />
-                <SliderControl label="Gamma" icon={<RefreshCcw className="w-4 h-4" />} value={adjustments.gamma} min={10} max={300} defaultValue={100} onChange={(v) => updateAdjustments({ gamma: v })} />
-              </div>
+            <div className="pt-6 border-t border-zinc-800/50 space-y-4">
+              <button 
+                onClick={() => setSectionsOpen(prev => ({ ...prev, basic: !prev.basic }))}
+                className="w-full flex items-center justify-between group"
+              >
+                <p className="text-xs font-bold text-zinc-500 group-hover:text-zinc-300 uppercase tracking-widest transition-colors">Basic</p>
+                {sectionsOpen.basic ? <ChevronUp className="w-3 h-3 text-zinc-600" /> : <ChevronDown className="w-3 h-3 text-zinc-600" />}
+              </button>
 
-              <SliderControl label="Saturation" icon={<Palette className="w-4 h-4" />} value={adjustments.saturation} min={-100} max={100} onChange={(v) => updateAdjustments({ saturation: v })} />
+              {sectionsOpen.basic && (
+                <div className="space-y-6 animate-in fade-in slide-in-from-top-1 duration-200">
+                  <SliderControl label="Exposure" icon={<Sun className="w-4 h-4" />} value={adjustments.exposure} min={-100} max={100} onChange={(v) => updateAdjustments({ exposure: v })} />
+                  <SliderControl label="Contrast" icon={<Contrast className="w-4 h-4" />} value={adjustments.contrast} min={-100} max={100} onChange={(v) => updateAdjustments({ contrast: v })} />
+                  
+                  <div className="grid grid-cols-1 gap-6 pt-2">
+                    <SliderControl label="Highlights" icon={<SunDim className="w-4 h-4" />} value={adjustments.highlights} min={-100} max={100} onChange={(v) => updateAdjustments({ highlights: v })} />
+                    <SliderControl label="Shadows" icon={<Moon className="w-4 h-4" />} value={adjustments.shadows} min={-100} max={100} onChange={(v) => updateAdjustments({ shadows: v })} />
+                    <SliderControl label="Whites" icon={<Sun className="w-4 h-4 text-zinc-400" />} value={adjustments.whites} min={-100} max={100} onChange={(v) => updateAdjustments({ whites: v })} />
+                    <SliderControl label="Blacks" icon={<Moon className="w-4 h-4 text-zinc-600" />} value={adjustments.blacks} min={-100} max={100} onChange={(v) => updateAdjustments({ blacks: v })} />
+                    <SliderControl label="Gamma" icon={<RefreshCcw className="w-4 h-4" />} value={adjustments.gamma} min={10} max={300} defaultValue={100} onChange={(v) => updateAdjustments({ gamma: v })} />
+                  </div>
+
+                  <SliderControl label="Saturation" icon={<Palette className="w-4 h-4" />} value={adjustments.saturation} min={-100} max={100} onChange={(v) => updateAdjustments({ saturation: v })} />
+                </div>
+              )}
             </div>
 
             {/* Color Section */}
-            <div className="pt-6 border-t border-zinc-800/50 space-y-6">
-              <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Color</p>
+            <div className="pt-6 border-t border-zinc-800/50 space-y-4">
+              <button 
+                onClick={() => setSectionsOpen(prev => ({ ...prev, color: !prev.color }))}
+                className="w-full flex items-center justify-between group"
+              >
+                <p className="text-xs font-bold text-zinc-500 group-hover:text-zinc-300 uppercase tracking-widest transition-colors">Color</p>
+                {sectionsOpen.color ? <ChevronUp className="w-3 h-3 text-zinc-600" /> : <ChevronDown className="w-3 h-3 text-zinc-600" />}
+              </button>
+
+              {sectionsOpen.color && (
+                <div className="space-y-6 animate-in fade-in slide-in-from-top-1 duration-200">
               <button
                 onClick={handleAutoWhiteBalance}
                 disabled={!selectedImage}
@@ -1037,9 +1125,18 @@ export default function App() {
 
               {/* Color Balance Section */}
               <div className="pt-6 border-t border-zinc-800/50 space-y-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Color Balance</p>
-                  <div className="flex bg-zinc-800 rounded-md p-0.5">
+                <button 
+                  onClick={() => setSectionsOpen(prev => ({ ...prev, colorBalance: !prev.colorBalance }))}
+                  className="w-full flex items-center justify-between group"
+                >
+                  <p className="text-xs font-bold text-zinc-500 group-hover:text-zinc-300 uppercase tracking-widest transition-colors">Color Balance</p>
+                  {sectionsOpen.colorBalance ? <ChevronUp className="w-3 h-3 text-zinc-600" /> : <ChevronDown className="w-3 h-3 text-zinc-600" />}
+                </button>
+
+                {sectionsOpen.colorBalance && (
+                  <div className="space-y-4 animate-in fade-in slide-in-from-top-1 duration-200">
+                    <div className="flex items-center justify-between">
+                      <div className="flex bg-zinc-800 rounded-md p-0.5">
                     {(['shadows', 'midtones', 'highlights'] as const).map((r) => (
                       <button
                         key={r}
@@ -1102,39 +1199,71 @@ export default function App() {
                   </div>
                 </div>
               </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
 
               {/* Detail Section */}
-              <div className="pt-6 border-t border-zinc-800/50 space-y-6">
-                <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Detail</p>
-                <SliderControl 
-                  label="Sharpen" 
-                  icon={<Zap className="w-4 h-4 text-amber-400" />} 
-                  value={adjustments.sharpen} 
-                  min={0} max={100} 
-                  onChange={(v) => updateAdjustments({ sharpen: v })} 
-                />
-                <SliderControl 
-                  label="Clarity" 
-                  icon={<Wind className="w-4 h-4 text-sky-400" />} 
-                  value={adjustments.clarity} 
-                  min={-100} max={100} 
-                  onChange={(v) => updateAdjustments({ clarity: v })} 
-                />
-                <SliderControl 
-                  label="Color NR" 
-                  icon={<Shield className="w-4 h-4 text-emerald-400" />} 
-                  value={adjustments.colorNoiseReduction} 
-                  min={0} max={100} 
-                  onChange={(v) => updateAdjustments({ colorNoiseReduction: v })} 
-                />
+              <div className="pt-6 border-t border-zinc-800/50 space-y-4">
+                <button 
+                  onClick={() => setSectionsOpen(prev => ({ ...prev, detail: !prev.detail }))}
+                  className="w-full flex items-center justify-between group"
+                >
+                  <p className="text-xs font-bold text-zinc-500 group-hover:text-zinc-300 uppercase tracking-widest transition-colors">Detail</p>
+                  {sectionsOpen.detail ? <ChevronUp className="w-3 h-3 text-zinc-600" /> : <ChevronDown className="w-3 h-3 text-zinc-600" />}
+                </button>
+
+                {sectionsOpen.detail && (
+                  <div className="space-y-6 animate-in fade-in slide-in-from-top-1 duration-200">
+                    <SliderControl 
+                      label="Sharpen" 
+                      icon={<Zap className="w-4 h-4 text-amber-400" />} 
+                      value={adjustments.sharpen} 
+                      min={0} max={100} 
+                      onChange={(v) => updateAdjustments({ sharpen: v })} 
+                    />
+                    <SliderControl 
+                      label="Clarity" 
+                      icon={<Wind className="w-4 h-4 text-sky-400" />} 
+                      value={adjustments.clarity} 
+                      min={-100} max={100} 
+                      onChange={(v) => updateAdjustments({ clarity: v })} 
+                    />
+                    <SliderControl 
+                      label="Color NR" 
+                      icon={<Shield className="w-4 h-4 text-emerald-400" />} 
+                      value={adjustments.colorNoiseReduction} 
+                      min={0} max={100} 
+                      onChange={(v) => updateAdjustments({ colorNoiseReduction: v })} 
+                    />
+                    <SliderControl 
+                      label="Vignette" 
+                      icon={<Maximize2 className="w-4 h-4 text-zinc-400" />} 
+                      value={adjustments.vignette} 
+                      min={-100} max={100} 
+                      onChange={(v) => updateAdjustments({ vignette: v })} 
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Halation Section */}
-              <div className="pt-6 border-t border-zinc-800/50 space-y-6">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Halation</p>
-                  <Sparkles className="w-4 h-4 text-red-400" />
-                </div>
+              <div className="pt-6 border-t border-zinc-800/50 space-y-4">
+                <button 
+                  onClick={() => setSectionsOpen(prev => ({ ...prev, halation: !prev.halation }))}
+                  className="w-full flex items-center justify-between group"
+                >
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs font-bold text-zinc-500 group-hover:text-zinc-300 uppercase tracking-widest transition-colors">Halation</p>
+                    <Sparkles className="w-3 h-3 text-red-400/50" />
+                  </div>
+                  {sectionsOpen.halation ? <ChevronUp className="w-3 h-3 text-zinc-600" /> : <ChevronDown className="w-3 h-3 text-zinc-600" />}
+                </button>
+
+                {sectionsOpen.halation && (
+                  <div className="space-y-6 animate-in fade-in slide-in-from-top-1 duration-200">
                 <SliderControl 
                   label="Intensity" 
                   icon={<Sun className="w-4 h-4 text-red-500" />} 
@@ -1146,7 +1275,7 @@ export default function App() {
                   label="Radius" 
                   icon={<Maximize2 className="w-4 h-4 text-zinc-400" />} 
                   value={adjustments.halationRadius} 
-                  min={1} max={50} 
+                  min={1} max={100} 
                   defaultValue={10}
                   onChange={(v) => updateAdjustments({ halationRadius: v })} 
                 />
@@ -1158,13 +1287,25 @@ export default function App() {
                   defaultValue={80}
                   onChange={(v) => updateAdjustments({ halationThreshold: v })} 
                 />
+                  </div>
+                )}
               </div>
             </div>
           </div>
         </div>
-      </div>
         
-      <div className="p-6 border-t border-zinc-800">
+      <div className="p-6 border-t border-zinc-800 space-y-2">
+          <button
+            onClick={() => {
+              if (!selectedImage) return;
+              setImages(prev => prev.map(img => ({ ...img, adjustments: { ...selectedImage.adjustments } })));
+            }}
+            disabled={!selectedImage || images.length <= 1}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 disabled:opacity-50 text-indigo-300 rounded-lg transition-colors text-sm font-medium"
+          >
+            <Layers className="w-4 h-4" />
+            Sync to All Images
+          </button>
           <button
             onClick={() => updateAdjustments(defaultAdjustments)}
             disabled={!selectedImage}

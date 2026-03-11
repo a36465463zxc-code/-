@@ -1,5 +1,72 @@
 import { Adjustments } from '../types';
 
+function applyBoxBlur(src: Float32Array, dst: Float32Array, temp: Float32Array, w: number, h: number, radius: number) {
+  if (radius < 1) {
+    dst.set(src);
+    return;
+  }
+  
+  // Horizontal
+  for (let y = 0; y < h; y++) {
+    let rSum = 0, gSum = 0, bSum = 0;
+    const windowSize = radius * 2 + 1;
+    
+    for (let dx = -radius; dx <= radius; dx++) {
+      const nx = Math.max(0, Math.min(w - 1, dx));
+      const idx = (y * w + nx) * 3;
+      rSum += src[idx];
+      gSum += src[idx + 1];
+      bSum += src[idx + 2];
+    }
+    
+    for (let x = 0; x < w; x++) {
+      const idx = (y * w + x) * 3;
+      temp[idx] = rSum / windowSize;
+      temp[idx + 1] = gSum / windowSize;
+      temp[idx + 2] = bSum / windowSize;
+      
+      const prevX = Math.max(0, x - radius);
+      const nextX = Math.min(w - 1, x + radius + 1);
+      const pIdx = (y * w + prevX) * 3;
+      const nIdx = (y * w + nextX) * 3;
+      
+      rSum = rSum - src[pIdx] + src[nIdx];
+      gSum = gSum - src[pIdx + 1] + src[nIdx + 1];
+      bSum = bSum - src[pIdx + 2] + src[nIdx + 2];
+    }
+  }
+  
+  // Vertical
+  for (let x = 0; x < w; x++) {
+    let rSum = 0, gSum = 0, bSum = 0;
+    const windowSize = radius * 2 + 1;
+    
+    for (let dy = -radius; dy <= radius; dy++) {
+      const ny = Math.max(0, Math.min(h - 1, dy));
+      const idx = (ny * w + x) * 3;
+      rSum += temp[idx];
+      gSum += temp[idx + 1];
+      bSum += temp[idx + 2];
+    }
+    
+    for (let y = 0; y < h; y++) {
+      const idx = (y * w + x) * 3;
+      dst[idx] = rSum / windowSize;
+      dst[idx + 1] = gSum / windowSize;
+      dst[idx + 2] = bSum / windowSize;
+      
+      const prevY = Math.max(0, y - radius);
+      const nextY = Math.min(h - 1, y + radius + 1);
+      const pIdx = (prevY * w + x) * 3;
+      const nIdx = (nextY * w + x) * 3;
+      
+      rSum = rSum - temp[pIdx] + temp[nIdx];
+      gSum = gSum - temp[pIdx + 1] + temp[nIdx + 1];
+      bSum = bSum - temp[pIdx + 2] + temp[nIdx + 2];
+    }
+  }
+}
+
 export function calculateLevels(srcData: Uint8ClampedArray, isNeg: boolean) {
   const histR = new Int32Array(256);
   const histG = new Int32Array(256);
@@ -200,7 +267,7 @@ export function processImageData(
 ) {
   const dstImageData = new ImageData(width, height);
   const dstData = dstImageData.data;
-  const { filmType, autoMask, exposure, temperature, tint, contrast, saturation, rOffset, gOffset, bOffset, shadows, highlights, whites, blacks, gamma } = adjustments;
+  const { filmType, autoMask, exposure, temperature, tint, contrast, saturation, rOffset, gOffset, bOffset, shadows, highlights, whites, blacks, gamma, vignette } = adjustments;
 
   const isNeg = filmType === 'color_neg' || filmType === 'bw_neg' || filmType === 'log';
   const isBW = filmType === 'bw_neg';
@@ -215,6 +282,11 @@ export function processImageData(
   const whiteFactor = whites / 100;
   const blackFactor = blacks / 100;
   const gammaValue = gamma / 100;
+
+  const vigAmount = vignette / 100;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const maxDist = Math.sqrt(centerX * centerX + centerY * centerY);
 
   const applyLogCurve = (v: number) => {
     let x = v / 255;
@@ -420,6 +492,24 @@ export function processImageData(
       }
     }
 
+    // 9.5 Vignette
+    if (vigAmount !== 0) {
+      const idx = i / 4;
+      const px = idx % width;
+      const py = Math.floor(idx / width);
+      const dx = px - centerX;
+      const dy = py - centerY;
+      const dist = Math.sqrt(dx * dx + dy * dy) / maxDist;
+      
+      // Subtle vignette curve: 1 - dist^2 * amount
+      // amount > 0: darken edges
+      // amount < 0: lighten edges
+      const v = 1 - (dist * dist * vigAmount);
+      r *= v;
+      g *= v;
+      b *= v;
+    }
+
     // Final clamp
     dstData[i] = Math.max(0, Math.min(255, r));
     dstData[i + 1] = Math.max(0, Math.min(255, g));
@@ -438,18 +528,28 @@ export function processImageData(
     const halThreshold = adjustments.halationThreshold;
 
     // Halation Pre-pass: Extract highlights with soft thresholding
-    let halMap: Float32Array | null = null;
+    let coreMap: Float32Array | null = null;
+    let midMap: Float32Array | null = null;
+    let largeMap: Float32Array | null = null;
+
     if (halIntensity > 0) {
-      halMap = new Float32Array(width * height * 3);
-      const softEdge = 20; // Soft transition range
+      const halMap = new Float32Array(width * height * 3);
       for (let i = 0; i < tempData.length; i += 4) {
         const r = tempData[i], g = tempData[i + 1], b = tempData[i + 2];
         const lum = 0.299 * r + 0.587 * g + 0.114 * b;
         
-        // Soft thresholding for smoother highlights
+        // Dynamic Highlight Extension: smoother extraction to prevent hard edges
         let weight = 0;
-        if (lum > halThreshold) {
-          weight = Math.min(1, (lum - halThreshold) / softEdge);
+        const softThreshold = Math.max(0, halThreshold - 50); // Even wider soft edge
+        if (lum > softThreshold) {
+          const range = 255 - softThreshold;
+          if (range > 0) {
+            const normalized = Math.min(1, (lum - softThreshold) / range);
+            // Softer power curve so it spreads more naturally and continuously
+            weight = Math.pow(normalized, 1.2);
+          } else {
+            weight = 1.0;
+          }
         }
         
         if (weight > 0) {
@@ -461,74 +561,37 @@ export function processImageData(
         }
       }
 
-      // Multi-pass Box Blur (approximates Gaussian)
-      const blurPasses = 3;
-      const passRadius = Math.max(1, Math.round(halRadius / Math.sqrt(blurPasses)));
+      // Multilayer Bloom: Generate 3 layers of blur
+      const scale = Math.max(width, height) / 1000;
+      const baseRadius = Math.max(1, halRadius * scale);
       
-      for (let p = 0; p < blurPasses; p++) {
-        const tempHal = new Float32Array(halMap);
-        // Horizontal
-        for (let y = 0; y < height; y++) {
-          let rSum = 0, gSum = 0, bSum = 0;
-          const windowSize = passRadius * 2 + 1;
-          
-          // Initial window
-          for (let dx = -passRadius; dx <= passRadius; dx++) {
-            const nx = Math.max(0, Math.min(width - 1, dx));
-            const idx = (y * width + nx) * 3;
-            rSum += tempHal[idx];
-            gSum += tempHal[idx + 1];
-            bSum += tempHal[idx + 2];
-          }
-          
-          for (let x = 0; x < width; x++) {
-            const idx = (y * width + x) * 3;
-            halMap[idx] = rSum / windowSize;
-            halMap[idx + 1] = gSum / windowSize;
-            halMap[idx + 2] = bSum / windowSize;
-            
-            // Slide window
-            const prevX = Math.max(0, x - passRadius);
-            const nextX = Math.min(width - 1, x + passRadius + 1);
-            const pIdx = (y * width + prevX) * 3;
-            const nIdx = (y * width + nextX) * 3;
-            
-            rSum = rSum - tempHal[pIdx] + tempHal[nIdx];
-            gSum = gSum - tempHal[pIdx + 1] + tempHal[nIdx + 1];
-            bSum = bSum - tempHal[pIdx + 2] + tempHal[nIdx + 2];
-          }
-        }
+      // 3 passes of box blur approximates a true Gaussian blur very well.
+      // We increase the radii significantly to get that wide, cinematic 800T diffusion.
+      const radii = [
+        Math.max(1, Math.round(baseRadius * 0.8)), // Core Glow (small)
+        Math.max(2, Math.round(baseRadius * 2.5)), // Diffused Bloom (medium)
+        Math.max(3, Math.round(baseRadius * 6.0))  // Large Halation (large)
+      ];
+
+      let currentMap = new Float32Array(halMap);
+      const tempMap = new Float32Array(width * height * 3);
+      const nextMap = new Float32Array(width * height * 3);
+      
+      for (let p = 0; p < 3; p++) {
+        const passRadius = radii[p];
         
-        // Vertical
-        tempHal.set(halMap);
-        for (let x = 0; x < width; x++) {
-          let rSum = 0, gSum = 0, bSum = 0;
-          const windowSize = passRadius * 2 + 1;
-          
-          for (let dy = -passRadius; dy <= passRadius; dy++) {
-            const ny = Math.max(0, Math.min(height - 1, dy));
-            const idx = (ny * width + x) * 3;
-            rSum += tempHal[idx];
-            gSum += tempHal[idx + 1];
-            bSum += tempHal[idx + 2];
-          }
-          
-          for (let y = 0; y < height; y++) {
-            const idx = (y * width + x) * 3;
-            halMap[idx] = rSum / windowSize;
-            halMap[idx + 1] = gSum / windowSize;
-            halMap[idx + 2] = bSum / windowSize;
-            
-            const prevY = Math.max(0, y - passRadius);
-            const nextY = Math.min(height - 1, y + passRadius + 1);
-            const pIdx = (prevY * width + x) * 3;
-            const nIdx = (nextY * width + x) * 3;
-            
-            rSum = rSum - tempHal[pIdx] + tempHal[nIdx];
-            gSum = gSum - tempHal[pIdx + 1] + tempHal[nIdx + 1];
-            bSum = bSum - tempHal[pIdx + 2] + tempHal[nIdx + 2];
-          }
-        }
+        // 3 passes of box blur per layer for a high-quality Gaussian approximation
+        applyBoxBlur(currentMap, nextMap, tempMap, width, height, passRadius);
+        applyBoxBlur(nextMap, currentMap, tempMap, width, height, passRadius);
+        applyBoxBlur(currentMap, nextMap, tempMap, width, height, passRadius);
+        
+        // After 3 passes, the result is in nextMap
+        if (p === 0) coreMap = new Float32Array(nextMap);
+        if (p === 1) midMap = new Float32Array(nextMap);
+        if (p === 2) largeMap = new Float32Array(nextMap);
+        
+        // Compound the blur: next layer starts from the current blurred state
+        currentMap.set(nextMap);
       }
     }
 
@@ -536,25 +599,48 @@ export function processImageData(
       for (let x = 1; x < width - 1; x++) {
         const i = (y * width + x) * 4;
         
-        // Apply Halation (Reddish glow with edge-aware falloff)
-        if (halMap) {
+        // Apply Halation (Multilayer, Chromatic, Mixed Blending)
+        if (coreMap && midMap && largeMap) {
           const hIdx = (y * width + x) * 3;
-          const rGlow = halMap[hIdx];
-          const gGlow = halMap[hIdx + 1];
-          const bGlow = halMap[hIdx + 2];
           
-          // Halation is primarily red, but has a specific "bleeding" look
-          // We use a non-linear blend to make it look more organic
-          const intensity = halIntensity * 1.5;
-          dstData[i] += rGlow * intensity;
-          dstData[i + 1] += gGlow * intensity * 0.2; // Much less green
-          dstData[i + 2] += bGlow * intensity * 0.1; // Almost no blue
+          const rCore = coreMap[hIdx], gCore = coreMap[hIdx + 1], bCore = coreMap[hIdx + 2];
+          const rMid = midMap[hIdx], gMid = midMap[hIdx + 1], bMid = midMap[hIdx + 2];
+          const rLarge = largeMap[hIdx], gLarge = largeMap[hIdx + 1], bLarge = largeMap[hIdx + 2];
           
-          // Add a secondary "bloom" effect for overall softness
-          const bloom = (rGlow + gGlow + bGlow) / 3 * halIntensity * 0.3;
-          dstData[i] += bloom;
-          dstData[i + 1] += bloom;
-          dstData[i + 2] += bloom;
+          // Screen blend mode helper
+          const blendScreen = (base: number, blend: number) => {
+             const b = Math.max(0, Math.min(255, blend));
+             return 255 - ((255 - base) * (255 - b)) / 255;
+          };
+          
+          // Linear Dodge (Add) helper
+          const blendAdd = (base: number, blend: number) => {
+             return Math.min(255, base + blend);
+          };
+
+          // 1. Core Glow: Screen mode, keeps original color but reduces green/blue to avoid washing out to white
+          const coreIntensity = halIntensity * 0.7;
+          let r = blendScreen(dstData[i], rCore * coreIntensity);
+          let g = blendScreen(dstData[i + 1], gCore * coreIntensity * 0.6);
+          let b = blendScreen(dstData[i + 2], bCore * coreIntensity * 0.3);
+          
+          // 2. Diffused Bloom: Add mode, Chromatic shift to rich orange
+          const midIntensity = halIntensity * 0.9;
+          const midLum = (rMid * 0.299 + gMid * 0.587 + bMid * 0.114);
+          r = blendAdd(r, midLum * midIntensity * 2.2);
+          g = blendAdd(g, midLum * midIntensity * 0.4); // Add some green for a richer orange transition
+          b = blendAdd(b, midLum * midIntensity * 0.05); // Tiny bit of blue to prevent pure flatness
+          
+          // 3. Large Halation: Add mode, Chromatic shift to deep cinematic red
+          const largeIntensity = halIntensity * 0.7;
+          const largeLum = (rLarge * 0.299 + gLarge * 0.587 + bLarge * 0.114);
+          r = blendAdd(r, largeLum * largeIntensity * 2.5);
+          g = blendAdd(g, largeLum * largeIntensity * 0.05); // Almost pure red, tiny bit of green for depth
+          b = blendAdd(b, 0); 
+          
+          dstData[i] = r;
+          dstData[i + 1] = g;
+          dstData[i + 2] = b;
         }
 
         // Simple 3x3 Sharpening & Clarity
