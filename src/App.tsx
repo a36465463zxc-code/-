@@ -194,7 +194,7 @@ export default function App() {
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement('canvas');
-      const MAX_WIDTH = 2560;
+      const MAX_WIDTH = 4096;
       let width = img.width;
       let height = img.height;
       
@@ -382,94 +382,158 @@ export default function App() {
     });
   };
 
-  const handleDownload = () => {
-    if (!canvasRef.current || !selectedImage) return;
+  const handleDownload = async () => {
+    if (!selectedImage) return;
     
-    // If we are currently cropping, canvasRef.current is the full image, so we need to crop it.
-    // If we are NOT cropping, canvasRef.current is ALREADY cropped by the useEffect.
-    const finalCanvas = (isCropping && selectedImage.crop) 
-      ? getCroppedCanvas(canvasRef.current, selectedImage.crop as Crop) 
-      : canvasRef.current;
+    setIsUploading(true); // Reuse uploading state as a generic loading state
+    
+    try {
+      const finalCanvas = await processImageAtSize(selectedImage);
+      if (!finalCanvas) return;
+        
+      const link = document.createElement('a');
+      const extension = exportConfig.format === 'image/tiff' ? 'tiff' : exportConfig.format.split('/')[1];
+      link.download = `processed-${selectedImage.name}.${extension}`;
       
-    const link = document.createElement('a');
-    const extension = exportConfig.format === 'image/tiff' ? 'tiff' : exportConfig.format.split('/')[1];
-    link.download = `processed-${selectedImage.name}.${extension}`;
-    
-    if (exportConfig.format === 'image/tiff') {
-      const ctx = finalCanvas.getContext('2d');
-      if (ctx) {
-        const imgData = ctx.getImageData(0, 0, finalCanvas.width, finalCanvas.height);
-        const tiffBuffer = UTIF.encodeImage(new Uint8Array(imgData.data.buffer), finalCanvas.width, finalCanvas.height);
-        const blob = new Blob([tiffBuffer], { type: 'image/tiff' });
-        link.href = URL.createObjectURL(blob);
+      if (exportConfig.format === 'image/tiff') {
+        const ctx = finalCanvas.getContext('2d');
+        if (ctx) {
+          const imgData = ctx.getImageData(0, 0, finalCanvas.width, finalCanvas.height);
+          const tiffBuffer = UTIF.encodeImage(new Uint8Array(imgData.data.buffer), finalCanvas.width, finalCanvas.height);
+          const blob = new Blob([tiffBuffer], { type: 'image/tiff' });
+          link.href = URL.createObjectURL(blob);
+          link.click();
+          URL.revokeObjectURL(link.href);
+        }
+      } else {
+        link.href = finalCanvas.toDataURL(exportConfig.format, exportConfig.quality);
         link.click();
-        URL.revokeObjectURL(link.href);
       }
-    } else {
-      link.href = finalCanvas.toDataURL(exportConfig.format, exportConfig.quality);
-      link.click();
+    } catch (err) {
+      console.error("Export failed:", err);
+      alert("Export failed. The image might be too large for your browser's memory.");
+    } finally {
+      setIsUploading(false);
     }
+  };
+
+  const processImageAtSize = async (imgItem: ImageItem, targetWidth?: number) => {
+    const img = new Image();
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+      img.src = imgItem.src;
+    });
+
+    const canvas = document.createElement('canvas');
+    let width = img.width;
+    let height = img.height;
+
+    if (targetWidth && width > targetWidth) {
+      height = Math.round((height * targetWidth) / width);
+      width = targetWidth;
+    }
+
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0, width, height);
+    const imageData = ctx.getImageData(0, 0, width, height);
+
+    const isNeg = imgItem.adjustments.filmType === 'color_neg' || imgItem.adjustments.filmType === 'bw_neg' || imgItem.adjustments.filmType === 'log';
+    const imgLevels = calculateLevels(imageData.data, isNeg);
+
+    const processedData = processImageData(
+      imageData.data,
+      width,
+      height,
+      imgItem.adjustments,
+      imgLevels
+    );
+    
+    const rotation = imgItem.adjustments.rotation;
+    const isRotated90 = rotation === 90 || rotation === 270;
+    
+    let finalWidth = width;
+    let finalHeight = height;
+    if (isRotated90) {
+      finalWidth = height;
+      finalHeight = width;
+    }
+    
+    const rotatedCanvas = document.createElement('canvas');
+    rotatedCanvas.width = finalWidth;
+    rotatedCanvas.height = finalHeight;
+    const rCtx = rotatedCanvas.getContext('2d');
+    if (!rCtx) return null;
+    
+    rCtx.save();
+    rCtx.translate(finalWidth / 2, finalHeight / 2);
+    rCtx.rotate((rotation * Math.PI) / 180);
+    
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = width;
+    tempCanvas.height = height;
+    const tempCtx = tempCanvas.getContext('2d');
+    if (tempCtx) {
+      tempCtx.putImageData(processedData, 0, 0);
+      if (rotation === 90 || rotation === 270) {
+        rCtx.drawImage(tempCanvas, -height / 2, -width / 2);
+      } else {
+        rCtx.drawImage(tempCanvas, -width / 2, -height / 2);
+      }
+    }
+    rCtx.restore();
+
+    if (imgItem.crop && imgItem.crop.width > 0 && imgItem.crop.height > 0) {
+      return getCroppedCanvas(rotatedCanvas, imgItem.crop as Crop);
+    }
+    
+    return rotatedCanvas;
   };
 
   const handleBatchDownload = async () => {
     if (images.length === 0) return;
-    const zip = new JSZip();
+    setIsUploading(true);
+    setUploadProgress(0);
     
-    for (const imgItem of images) {
-       const img = new Image();
-       await new Promise((resolve) => {
-         img.onload = resolve;
-         img.src = imgItem.src;
-       });
-       
-       const canvas = document.createElement('canvas');
-       const MAX_WIDTH = 1600;
-       let width = img.width;
-       let height = img.height;
-       if (width > MAX_WIDTH) {
-         height = Math.round((height * MAX_WIDTH) / width);
-         width = MAX_WIDTH;
-       }
-       canvas.width = width;
-       canvas.height = height;
-       const ctx = canvas.getContext('2d');
-       if (!ctx) continue;
-       ctx.drawImage(img, 0, 0, width, height);
-       const imageData = ctx.getImageData(0, 0, width, height);
-       
-       const isNeg = imgItem.adjustments.filmType === 'color_neg' || imgItem.adjustments.filmType === 'bw_neg' || imgItem.adjustments.filmType === 'log';
-       const imgLevels = calculateLevels(imageData.data, isNeg);
-       
-       const processedData = processImageData(
-         imageData.data,
-         width,
-         height,
-         imgItem.adjustments,
-         imgLevels
-       );
-       ctx.putImageData(processedData, 0, 0);
-       
-       const finalCanvas = imgItem.crop ? getCroppedCanvas(canvas, imgItem.crop as Crop) : canvas;
-       const extension = exportConfig.format === 'image/tiff' ? 'tiff' : exportConfig.format.split('/')[1];
-       
-       if (exportConfig.format === 'image/tiff') {
-         const finalCtx = finalCanvas.getContext('2d');
-         if (finalCtx) {
-           const imgData = finalCtx.getImageData(0, 0, finalCanvas.width, finalCanvas.height);
-           const tiffBuffer = UTIF.encodeImage(new Uint8Array(imgData.data.buffer), finalCanvas.width, finalCanvas.height);
-           const blob = new Blob([tiffBuffer], { type: 'image/tiff' });
-           zip.file(`processed-${imgItem.name}.${extension}`, blob);
-         }
-       } else {
-         const blob = await new Promise<Blob | null>(resolve => finalCanvas.toBlob(resolve, exportConfig.format, exportConfig.quality));
-         if (blob) {
-           zip.file(`processed-${imgItem.name}.${extension}`, blob);
-         }
-       }
+    try {
+      const zip = new JSZip();
+      
+      for (let i = 0; i < images.length; i++) {
+        const imgItem = images[i];
+        const finalCanvas = await processImageAtSize(imgItem);
+        if (!finalCanvas) continue;
+        
+        const extension = exportConfig.format === 'image/tiff' ? 'tiff' : exportConfig.format.split('/')[1];
+        
+        if (exportConfig.format === 'image/tiff') {
+          const finalCtx = finalCanvas.getContext('2d');
+          if (finalCtx) {
+            const imgData = finalCtx.getImageData(0, 0, finalCanvas.width, finalCanvas.height);
+            const tiffBuffer = UTIF.encodeImage(new Uint8Array(imgData.data.buffer), finalCanvas.width, finalCanvas.height);
+            const blob = new Blob([tiffBuffer], { type: 'image/tiff' });
+            zip.file(`processed-${imgItem.name}.${extension}`, blob);
+          }
+        } else {
+          const blob = await new Promise<Blob | null>(resolve => finalCanvas.toBlob(resolve, exportConfig.format, exportConfig.quality));
+          if (blob) {
+            zip.file(`processed-${imgItem.name}.${extension}`, blob);
+          }
+        }
+        setUploadProgress(Math.round(((i + 1) / images.length) * 100));
+      }
+      
+      const content = await zip.generateAsync({ type: 'blob' });
+      saveAs(content, 'filmlab-batch.zip');
+    } catch (err) {
+      console.error("Batch export failed:", err);
+      alert("Batch export failed. Some images might be too large.");
+    } finally {
+      setIsUploading(false);
+      setUploadProgress(0);
     }
-    
-    const content = await zip.generateAsync({ type: 'blob' });
-    saveAs(content, 'filmlab-batch.zip');
   };
 
   const removeImage = (id: string) => {
@@ -743,8 +807,8 @@ export default function App() {
                 </div>
               )}
               <TransformComponent 
-                wrapperClass="w-full h-full h-[750px]" 
-                contentClass="w-full h-full flex items-center justify-center"
+                wrapperStyle={{ width: '100%', height: '100%' }}
+                contentStyle={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
               >
                   {!selectedImage ? (
                     <div className="text-center text-zinc-500">
@@ -753,11 +817,11 @@ export default function App() {
                       <p className="text-sm mt-2 opacity-60">You can also drag and drop images here</p>
                     </div>
                   ) : (
-                    <div className="relative flex items-center justify-center w-full h-full p-4">
+                    <div className="relative flex items-center justify-center w-full h-full p-4 md:p-8">
                       <ReactCrop 
                         crop={selectedImage.crop} 
                         onChange={(c, pc) => updateCrop(c, pc)}
-                        className="max-w-full max-h-full"
+                        className="w-full h-full flex items-center justify-center"
                         disabled={!isCropping}
                         locked={!isCropping}
                         style={{ display: isCropping ? 'flex' : 'none' }}
@@ -766,13 +830,13 @@ export default function App() {
                       >
                         <canvas
                           ref={isCropping ? canvasRef : null}
-                          className="max-w-full max-h-full w-auto h-auto object-contain shadow-2xl rounded-sm"
+                          className="w-full h-full object-contain shadow-2xl rounded-sm"
                           style={{ backgroundImage: 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyEgSRC0AQAK9CGVG3UW0AAAAABJRU5ErkJggg==")' }}
                         />
                       </ReactCrop>
                       <canvas
                         ref={!isCropping ? canvasRef : null}
-                        className="max-w-full max-h-full w-auto h-auto object-contain shadow-2xl rounded-sm"
+                        className="w-full h-full object-contain shadow-2xl rounded-sm"
                         style={{ display: isCropping ? 'none' : 'block', backgroundImage: 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyEgSRC0AQAK9CGVG3UW0AAAAABJRU5ErkJggg==")' }}
                       />
 
@@ -780,7 +844,7 @@ export default function App() {
                       <>
                         <canvas
                           ref={originalCanvasRef}
-                          className="absolute max-w-full max-h-full w-auto h-auto object-contain shadow-2xl rounded-sm pointer-events-none"
+                          className="absolute w-full h-full object-contain shadow-2xl rounded-sm pointer-events-none"
                           style={{ 
                             clipPath: `inset(0 ${100 - splitPosition}% 0 0)`,
                             backgroundImage: 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyEgSRC0AQAK9CGVG3UW0AAAAABJRU5ErkJggg==")' 
