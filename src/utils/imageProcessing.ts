@@ -185,10 +185,42 @@ export function calculateAutoWhiteBalance(srcData: Uint8ClampedArray, isNeg: boo
 
   const avg = (avgR + avgG + avgB) / 3;
 
+  let rOffset = avg - avgR;
+  let gOffset = avg - avgG;
+  let bOffset = avg - avgB;
+
+  // 针对偏蓝和偏紫的颜色进行 30% 的增强矫正
+  // 偏蓝：bOffset 为负数（需要减少蓝色）
+  if (bOffset < 0) {
+    bOffset *= 1.3;
+  }
+  
+  // 偏紫：rOffset 和 bOffset 均为负数（需要同时减少红色和蓝色）
+  if (rOffset < 0 && bOffset < 0) {
+    rOffset *= 1.3;
+  }
+
+  // 重新平衡亮度：因为我们放大了负数偏移，会导致整体画面变暗
+  // 我们将减少的数值补偿到需要增加的通道上，保证整体亮度（偏移总和）不变
+  const newSum = rOffset + gOffset + bOffset;
+  if (newSum < 0) {
+    let posCount = 0;
+    if (rOffset > 0) posCount++;
+    if (gOffset > 0) posCount++;
+    if (bOffset > 0) posCount++;
+    
+    if (posCount > 0) {
+      const addition = -newSum / posCount;
+      if (rOffset > 0) rOffset += addition;
+      if (gOffset > 0) gOffset += addition;
+      if (bOffset > 0) bOffset += addition;
+    }
+  }
+
   return {
-    rOffset: Math.round(avg - avgR),
-    gOffset: Math.round(avg - avgG),
-    bOffset: Math.round(avg - avgB)
+    rOffset: Math.round(rOffset),
+    gOffset: Math.round(gOffset),
+    bOffset: Math.round(bOffset)
   };
 }
 
@@ -211,6 +243,41 @@ export function calculateHistogram(imageData: ImageData) {
   }
   
   return { r, g, b, l };
+}
+
+export function rgbToHsl(r: number, g: number, b: number) {
+  const rNorm = r / 255;
+  const gNorm = g / 255;
+  const bNorm = b / 255;
+
+  const max = Math.max(rNorm, gNorm, bNorm);
+  const min = Math.min(rNorm, gNorm, bNorm);
+  let h = 0, s = 0, l = (max + min) / 2;
+
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case rNorm: h = (gNorm - bNorm) / d + (gNorm < bNorm ? 6 : 0); break;
+      case gNorm: h = (bNorm - rNorm) / d + 2; break;
+      case bNorm: h = (rNorm - gNorm) / d + 4; break;
+    }
+    h /= 6;
+  }
+
+  return { h, s, l };
+}
+
+export function getHslColorRange(h: number): import('../types').HSLColor {
+  // h is between 0 and 1
+  if (h < 15/360 || h >= 345/360) return 'reds';
+  if (h < 45/360) return 'oranges';
+  if (h < 90/360) return 'yellows';
+  if (h < 150/360) return 'greens';
+  if (h < 210/360) return 'aquas';
+  if (h < 262.5/360) return 'blues'; // Midpoint between 240 and 285
+  if (h < 300/360) return 'purples'; // Midpoint between 285 and 315
+  return 'magentas';
 }
 
 export function processImageData(

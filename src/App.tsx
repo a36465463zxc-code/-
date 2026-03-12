@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Download, RefreshCcw, Sliders, Sun, Thermometer, Droplet, Contrast, Palette, Image as ImageIcon, SplitSquareHorizontal, Crop as CropIcon, Layers, SunDim, Moon, SaveAll, ChevronDown, ChevronUp, Sparkles, RotateCw, Maximize2, Minimize2, Zap, Wind, Shield, X, Check, ZoomIn, ZoomOut, Maximize } from 'lucide-react';
+import { Pipette, Upload, Download, RefreshCcw, Sliders, Sun, Thermometer, Droplet, Contrast, Palette, Image as ImageIcon, SplitSquareHorizontal, Crop as CropIcon, Layers, SunDim, Moon, SaveAll, ChevronDown, ChevronUp, Sparkles, RotateCw, Maximize2, Minimize2, Zap, Wind, Shield, X, Check, ZoomIn, ZoomOut, Maximize } from 'lucide-react';
 import UTIF from 'utif';
 import ReactCrop, { Crop, PixelCrop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
@@ -8,7 +8,7 @@ import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
 import { FilmType, Adjustments, defaultAdjustments, ImageItem, LUT3D, HSLColor } from './types';
-import { calculateLevels, processImageData, calculateAutoWhiteBalance, calculateHistogram } from './utils/imageProcessing';
+import { calculateLevels, processImageData, calculateAutoWhiteBalance, calculateHistogram, rgbToHsl, getHslColorRange } from './utils/imageProcessing';
 import { parseCubeLUT } from './utils/lutParser';
 import { SliderControl } from './components/SliderControl';
 import { ImageItemCard } from './components/ImageItemCard';
@@ -22,6 +22,15 @@ export default function App() {
   const [compareMode, setCompareMode] = useState<'none' | 'split'>('none');
   const [splitPosition, setSplitPosition] = useState(50);
   const [isCropping, setIsCropping] = useState(false);
+  const [isColorMixPickerActive, setIsColorMixPickerActive] = useState(false);
+  const colorMixDragRef = useRef<{
+    active: boolean;
+    startX: number;
+    startY: number;
+    startHue: number;
+    startSat: number;
+    color: HSLColor;
+  } | null>(null);
   const [isPresetsOpen, setIsPresetsOpen] = useState(false);
   const [exportConfig, setExportConfig] = useState({
     format: 'image/jpeg' as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/tiff',
@@ -54,11 +63,15 @@ export default function App() {
   const selectedImage = images.find(img => img.id === selectedId);
   const adjustments = selectedImage?.adjustments || defaultAdjustments;
 
-  const updateAdjustments = (newAdj: Partial<Adjustments>) => {
+  const updateAdjustments = (newAdj: Partial<Adjustments> | ((prev: Adjustments) => Partial<Adjustments>)) => {
     if (!selectedId) return;
-    setImages(prev => prev.map(img => 
-      img.id === selectedId ? { ...img, adjustments: { ...img.adjustments, ...newAdj } } : img
-    ));
+    setImages(prev => prev.map(img => {
+      if (img.id === selectedId) {
+        const updates = typeof newAdj === 'function' ? newAdj(img.adjustments) : newAdj;
+        return { ...img, adjustments: { ...img.adjustments, ...updates } };
+      }
+      return img;
+    }));
   };
 
   const updateColorBalance = (range: 'shadows' | 'midtones' | 'highlights', channel: 'r' | 'g' | 'b', value: number) => {
@@ -201,6 +214,10 @@ export default function App() {
     }
     e.target.value = '';
   };
+
+  useEffect(() => {
+    setIsColorMixPickerActive(false);
+  }, [selectedId]);
 
   useEffect(() => {
     if (!selectedImage) {
@@ -563,6 +580,85 @@ export default function App() {
     }
   };
 
+  const handleColorMixMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isColorMixPickerActive || !canvasRef.current || !selectedImage) return;
+    
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    
+    const canvasX = Math.floor(x * scaleX);
+    const canvasY = Math.floor(y * scaleY);
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    const pixel = ctx.getImageData(canvasX, canvasY, 1, 1).data;
+    const r = pixel[0];
+    const g = pixel[1];
+    const b = pixel[2];
+    
+    const hsl = rgbToHsl(r, g, b);
+    const colorRange = getHslColorRange(hsl.h);
+    
+    setActiveHslColor(colorRange);
+    
+    const currentHsl = adjustments.hsl?.[colorRange] || { h: 0, s: 0, l: 0 };
+    
+    colorMixDragRef.current = {
+      active: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      startHue: currentHsl.h,
+      startSat: currentHsl.s,
+      color: colorRange
+    };
+    
+    window.addEventListener('mousemove', handleColorMixMouseMove);
+    window.addEventListener('mouseup', handleColorMixMouseUp);
+  };
+
+  const handleColorMixMouseMove = (e: MouseEvent) => {
+    if (!colorMixDragRef.current?.active) return;
+    
+    const { startX, startY, startHue, startSat, color } = colorMixDragRef.current;
+    const deltaX = e.clientX - startX;
+    const deltaY = e.clientY - startY;
+    
+    // Sensitivity: 1 pixel = 0.5 adjustment units
+    const sensitivity = 0.5;
+    
+    let newHue = startHue + deltaX * sensitivity;
+    let newSat = startSat - deltaY * sensitivity; // Up decreases Y, so -deltaY means up increases saturation
+    
+    newHue = Math.max(-100, Math.min(100, newHue));
+    newSat = Math.max(-100, Math.min(100, newSat));
+    
+    updateAdjustments((prev) => ({
+      hsl: {
+        ...(prev.hsl || defaultAdjustments.hsl!),
+        [color]: {
+          ...(prev.hsl?.[color] || { h: 0, s: 0, l: 0 }),
+          h: Math.round(newHue),
+          s: Math.round(newSat)
+        }
+      }
+    }));
+  };
+
+  const handleColorMixMouseUp = () => {
+    if (colorMixDragRef.current) {
+      colorMixDragRef.current.active = false;
+    }
+    window.removeEventListener('mousemove', handleColorMixMouseMove);
+    window.removeEventListener('mouseup', handleColorMixMouseUp);
+  };
+
   const [isDragging, setIsDragging] = useState(false);
   const dragCounter = useRef(0);
 
@@ -662,7 +758,7 @@ export default function App() {
       {/* Main Area */}
       <TransformWrapper
         key={`${selectedId}-${adjustments.rotation}`}
-        disabled={isCropping}
+        disabled={isCropping || isColorMixPickerActive}
         minScale={0.1}
         maxScale={10}
         centerOnInit={true}
@@ -869,8 +965,9 @@ export default function App() {
                         <>
                           <canvas
                             ref={canvasRef}
-                            className="w-full h-full block"
+                            className={`w-full h-full block ${isColorMixPickerActive ? 'cursor-crosshair' : ''}`}
                             style={{ backgroundImage: 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyEgSRC0AQAK9CGVG3UW0AAAAABJRU5ErkJggg==")' }}
+                            onMouseDown={handleColorMixMouseDown}
                           />
                           
                           {compareMode === 'split' && (
@@ -1083,7 +1180,13 @@ export default function App() {
                     <button
                       key={preset.id}
                       onClick={() => {
-                        const newAdj = { ...defaultAdjustments, ...preset.adjustments, rotation: adjustments.rotation };
+                        const { filmType, ...presetAdjustmentsWithoutFilmType } = preset.adjustments;
+                        const newAdj = { 
+                          ...defaultAdjustments, 
+                          ...presetAdjustmentsWithoutFilmType, 
+                          rotation: adjustments.rotation,
+                          filmType: adjustments.filmType
+                        };
                         updateAdjustments(newAdj);
                       }}
                       className="text-left p-2 rounded-lg bg-zinc-800/50 hover:bg-zinc-800 border border-zinc-700/50 hover:border-zinc-600 transition-all group"
@@ -1269,6 +1372,16 @@ export default function App() {
                     </div>
 
                     <div className="space-y-4 bg-zinc-950/30 p-3 rounded-xl border border-zinc-800/50">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-medium text-zinc-400 capitalize">{activeHslColor}</span>
+                        <button
+                          onClick={() => setIsColorMixPickerActive(!isColorMixPickerActive)}
+                          className={`p-1.5 rounded-md transition-colors ${isColorMixPickerActive ? 'bg-indigo-500/20 text-indigo-400' : 'hover:bg-zinc-800 text-zinc-400 hover:text-zinc-300'}`}
+                          title="Targeted Adjustment Tool (Click on image and drag: Left/Right for Hue, Up/Down for Saturation)"
+                        >
+                          <Pipette className="w-4 h-4" />
+                        </button>
+                      </div>
                       <SliderControl 
                         label="Hue" 
                         icon={<div className="w-3 h-3 rounded-full bg-gradient-to-r from-red-500 via-green-500 to-blue-500" />} 

@@ -111,6 +111,87 @@ export const FILM_PRESETS: FilmPreset[] = [
       vignette: 0
     }
   },
+  // Reversal Film Look (Applied to Negatives)
+  {
+    id: 'ektachrome-e100',
+    name: 'Kodak Ektachrome E100',
+    description: 'Accurate colors, moderate contrast, and bright whites.',
+    adjustments: {
+      filmType: 'color_neg',
+      temperature: -2,
+      tint: 0,
+      saturation: 10,
+      contrast: 15,
+      highlights: 5,
+      shadows: -5,
+      halationIntensity: 0,
+      vignette: 0
+    }
+  },
+  {
+    id: 'kodachrome-64',
+    name: 'Kodachrome 64',
+    description: 'Iconic vintage look with rich reds, yellows, and high contrast.',
+    adjustments: {
+      filmType: 'color_neg',
+      temperature: 8,
+      tint: 5,
+      saturation: 15,
+      contrast: 20,
+      highlights: -10,
+      shadows: -15,
+      halationIntensity: 0,
+      vignette: 0
+    }
+  },
+  {
+    id: 'velvia-50',
+    name: 'Fujifilm Velvia 50',
+    description: 'Extremely high saturation and contrast, vibrant greens and magentas.',
+    adjustments: {
+      filmType: 'color_neg',
+      temperature: 2,
+      tint: 8,
+      saturation: 30,
+      contrast: 25,
+      highlights: 10,
+      shadows: -20,
+      halationIntensity: 0,
+      vignette: 0
+    }
+  },
+  {
+    id: 'provia-100f',
+    name: 'Fujifilm Provia 100F',
+    description: 'Versatile, realistic but punchy colors with fine grain.',
+    adjustments: {
+      filmType: 'color_neg',
+      temperature: -4,
+      tint: 2,
+      saturation: 12,
+      contrast: 12,
+      highlights: 5,
+      shadows: -5,
+      halationIntensity: 0,
+      vignette: 0
+    }
+  },
+  {
+    id: 'astia-100f',
+    name: 'Fujifilm Astia 100F',
+    description: 'Softer contrast and subdued saturation, excellent for skin tones.',
+    adjustments: {
+      filmType: 'color_neg',
+      temperature: 0,
+      tint: -2,
+      saturation: -5,
+      contrast: 5,
+      highlights: -5,
+      shadows: 5,
+      halationIntensity: 0,
+      vignette: 0
+    }
+  },
   // Black & White
   {
     id: 'tri-x-400',

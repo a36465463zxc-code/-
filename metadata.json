@@ -1,5 +1,5 @@
 {
-  "name": "FilmLab Web",
+  "name": "FilmLab",
   "description": "A web-based tool to convert color and black & white film negatives to positives, remove orange masks, and adjust colors.",
   "requestFramePermissions": []
 }
