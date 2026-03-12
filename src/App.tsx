@@ -7,7 +7,7 @@ import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
-import { FilmType, Adjustments, defaultAdjustments, ImageItem, LUT3D } from './types';
+import { FilmType, Adjustments, defaultAdjustments, ImageItem, LUT3D, HSLColor } from './types';
 import { calculateLevels, processImageData, calculateAutoWhiteBalance, calculateHistogram } from './utils/imageProcessing';
 import { parseCubeLUT } from './utils/lutParser';
 import { SliderControl } from './components/SliderControl';
@@ -33,13 +33,16 @@ export default function App() {
   const [availableLuts, setAvailableLuts] = useState<LUT3D[]>([]);
   const [mobileView, setMobileView] = useState<'gallery' | 'preview' | 'adjust'>('preview');
   const [sectionsOpen, setSectionsOpen] = useState({
-    lut: true,
-    basic: true,
-    color: true,
-    colorBalance: true,
-    detail: true,
-    halation: true,
+    lut: false,
+    basic: false,
+    color: false,
+    colorMix: false,
+    colorBalance: false,
+    detail: false,
+    halation: false,
   });
+  
+  const [activeHslColor, setActiveHslColor] = useState<HSLColor>('reds');
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const originalCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -66,6 +69,20 @@ export default function App() {
         ...currentCB,
         [range]: {
           ...currentCB[range],
+          [channel]: value
+        }
+      }
+    });
+  };
+
+  const updateHsl = (color: HSLColor, channel: 'h' | 's' | 'l', value: number) => {
+    if (!selectedId) return;
+    const currentHsl = adjustments.hsl || defaultAdjustments.hsl!;
+    updateAdjustments({
+      hsl: {
+        ...currentHsl,
+        [color]: {
+          ...currentHsl[color],
           [channel]: value
         }
       }
@@ -99,7 +116,7 @@ export default function App() {
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const ext = file.name.split('.').pop()?.toLowerCase() || '';
-      const isTiffOrRaw = ['tif', 'tiff', 'dng', 'cr2', 'nef', 'arw'].includes(ext);
+      const isTiffOrRaw = ['tif', 'tiff', 'dng', 'cr2', 'nef', 'arw', 'fff'].includes(ext);
 
       let src = '';
       if (isTiffOrRaw) {
@@ -194,7 +211,7 @@ export default function App() {
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement('canvas');
-      const MAX_WIDTH = 4096;
+      const MAX_WIDTH = 1920;
       let width = img.width;
       let height = img.height;
       
@@ -429,9 +446,12 @@ export default function App() {
     let width = img.width;
     let height = img.height;
 
-    if (targetWidth && width > targetWidth) {
-      height = Math.round((height * targetWidth) / width);
-      width = targetWidth;
+    const MAX_EXPORT_WIDTH = 6144;
+    const effectiveTargetWidth = targetWidth ? Math.min(targetWidth, MAX_EXPORT_WIDTH) : MAX_EXPORT_WIDTH;
+
+    if (width > effectiveTargetWidth) {
+      height = Math.round((height * effectiveTargetWidth) / width);
+      width = effectiveTargetWidth;
     }
 
     canvas.width = width;
@@ -601,7 +621,7 @@ export default function App() {
           <label className="flex items-center justify-center gap-2 w-full py-2 px-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg transition-colors text-sm font-medium cursor-pointer">
             <Upload className="w-4 h-4" />
             Import Images
-            <input type="file" multiple className="hidden" accept="image/*,.tif,.tiff,.dng,.cr2,.nef,.arw,.bmp" onChange={handleFileUpload} />
+            <input type="file" multiple className="hidden" accept="image/*,.tif,.tiff,.dng,.cr2,.nef,.arw,.fff,.bmp" onChange={handleFileUpload} />
           </label>
         </div>
 
@@ -1187,6 +1207,88 @@ export default function App() {
                 <SliderControl label="Blue Offset" icon={<Layers className="w-4 h-4 text-blue-400" />} value={adjustments.bOffset} min={-100} max={100} onChange={(v) => updateAdjustments({ bOffset: v })} />
               </div>
 
+              {/* Color Mix Section */}
+              <div className="pt-6 border-t border-zinc-800/50 space-y-4">
+                <button 
+                  onClick={() => setSectionsOpen(prev => ({ ...prev, colorMix: !prev.colorMix }))}
+                  className="w-full flex items-center justify-between group"
+                >
+                  <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider group-hover:text-indigo-400 transition-colors flex items-center gap-2">
+                    <Palette className="w-4 h-4" />
+                    Color Mix
+                  </h3>
+                  {sectionsOpen.colorMix ? <ChevronUp className="w-3 h-3 text-zinc-600" /> : <ChevronDown className="w-3 h-3 text-zinc-600" />}
+                </button>
+
+                {sectionsOpen.colorMix && (
+                  <div className="space-y-4 animate-in fade-in slide-in-from-top-1 duration-200">
+                    <div className="grid grid-cols-8 gap-1">
+                      {(['reds', 'oranges', 'yellows', 'greens', 'aquas', 'blues', 'purples', 'magentas'] as HSLColor[]).map((c) => {
+                        const colors = {
+                          reds: 'bg-red-500',
+                          oranges: 'bg-orange-500',
+                          yellows: 'bg-yellow-500',
+                          greens: 'bg-green-500',
+                          aquas: 'bg-teal-400',
+                          blues: 'bg-blue-500',
+                          purples: 'bg-purple-500',
+                          magentas: 'bg-pink-500'
+                        };
+                        return (
+                          <button
+                            key={c}
+                            onClick={() => setActiveHslColor(c)}
+                            className={`w-full aspect-square rounded-full transition-all flex items-center justify-center ${
+                              activeHslColor === c ? 'ring-2 ring-indigo-500 ring-offset-2 ring-offset-zinc-900 scale-110' : 'hover:scale-110 opacity-70 hover:opacity-100'
+                            }`}
+                          >
+                            <div className={`w-full h-full rounded-full ${colors[c]}`} />
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="space-y-4 bg-zinc-950/30 p-3 rounded-xl border border-zinc-800/50">
+                      <SliderControl 
+                        label="Hue" 
+                        icon={<div className="w-3 h-3 rounded-full bg-gradient-to-r from-red-500 via-green-500 to-blue-500" />} 
+                        value={adjustments.hsl?.[activeHslColor]?.h || 0} 
+                        min={-100} max={100} 
+                        onChange={(v) => updateHsl(activeHslColor, 'h', v)} 
+                      />
+                      <SliderControl 
+                        label="Saturation" 
+                        icon={<Droplet className="w-4 h-4 text-zinc-400" />} 
+                        value={adjustments.hsl?.[activeHslColor]?.s || 0} 
+                        min={-100} max={100} 
+                        onChange={(v) => updateHsl(activeHslColor, 's', v)} 
+                      />
+                      <SliderControl 
+                        label="Luminance" 
+                        icon={<Sun className="w-4 h-4 text-zinc-400" />} 
+                        value={adjustments.hsl?.[activeHslColor]?.l || 0} 
+                        min={-100} max={100} 
+                        onChange={(v) => updateHsl(activeHslColor, 'l', v)} 
+                      />
+                      
+                      <div className="pt-2 flex items-center justify-end border-t border-zinc-800/50 mt-2">
+                        <button 
+                          onClick={() => {
+                            const currentHsl = adjustments.hsl || defaultAdjustments.hsl!;
+                            updateAdjustments({ 
+                              hsl: { ...currentHsl, [activeHslColor]: { h: 0, s: 0, l: 0 } } 
+                            });
+                          }}
+                          className="text-[10px] font-bold text-zinc-600 hover:text-red-400 transition-colors uppercase tracking-tighter"
+                        >
+                          Reset {activeHslColor}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Color Balance Section */}
               <div className="pt-6 border-t border-zinc-800/50 space-y-4">
                 <button 
@@ -1294,6 +1396,13 @@ export default function App() {
                       value={adjustments.clarity} 
                       min={-100} max={100} 
                       onChange={(v) => updateAdjustments({ clarity: v })} 
+                    />
+                    <SliderControl 
+                      label="Luminance NR" 
+                      icon={<Droplet className="w-4 h-4 text-zinc-400" />} 
+                      value={adjustments.luminanceNoiseReduction} 
+                      min={0} max={100} 
+                      onChange={(v) => updateAdjustments({ luminanceNoiseReduction: v })} 
                     />
                     <SliderControl 
                       label="Color NR" 

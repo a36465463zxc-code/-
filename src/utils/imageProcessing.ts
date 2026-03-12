@@ -88,55 +88,28 @@ export function calculateLevels(srcData: Uint8ClampedArray, isNeg: boolean) {
 
   const totalPixels = srcData.length / 4;
   
-  // For negatives, the "low" percentile represents the film base (mask).
-  // We use a slightly more aggressive clip to ensure we fully subtract the mask.
-  const clipLow = isNeg ? 0.01 : 0.005; 
-  const clipHigh = isNeg ? 0.005 : 0.005;
-  
-  const targetLow = totalPixels * clipLow;
-  const targetHigh = totalPixels * (1 - clipHigh);
-
-  const getPercentile = (hist: Int32Array) => {
-    let low = 0;
+  const getPercentile = (hist: Int32Array, percentile: number) => {
+    const target = totalPixels * percentile;
     let sum = 0;
     for (let i = 0; i < 256; i++) {
       sum += hist[i];
-      if (sum >= targetLow) {
-        low = i;
-        break;
-      }
+      if (sum >= target) return i;
     }
-    let high = 255;
-    sum = 0;
-    for (let i = 0; i < 256; i++) {
-      sum += hist[i];
-      if (sum >= targetHigh) {
-        high = i;
-        break;
-      }
-    }
-    if (high <= low) high = low + 1;
-    return { low, high };
+    return 255;
   };
 
-  const rLevels = getPercentile(histR);
-  const gLevels = getPercentile(histG);
-  const bLevels = getPercentile(histB);
+  const rLow = getPercentile(histR, 0.005);
+  const gLow = getPercentile(histG, 0.005);
+  const bLow = getPercentile(histB, 0.005);
 
-  // OPTIMIZATION: Linked Highlights for Negatives
-  if (isNeg) {
-    const globalHigh = Math.max(rLevels.high, gLevels.high, bLevels.high);
-    // Reduced blend to prevent the image from becoming too dark
-    const blend = 0.3; 
-    rLevels.high = Math.round(rLevels.high * (1 - blend) + globalHigh * blend);
-    gLevels.high = Math.round(gLevels.high * (1 - blend) + globalHigh * blend);
-    bLevels.high = Math.round(bLevels.high * (1 - blend) + globalHigh * blend);
-  }
+  const rHigh = getPercentile(histR, 0.995);
+  const gHigh = getPercentile(histG, 0.995);
+  const bHigh = getPercentile(histB, 0.995);
 
   return {
-    r: rLevels,
-    g: gLevels,
-    b: bLevels
+    r: { low: rLow, high: rHigh },
+    g: { low: gLow, high: gHigh },
+    b: { low: bLow, high: bHigh }
   };
 }
 
@@ -212,28 +185,10 @@ export function calculateAutoWhiteBalance(srcData: Uint8ClampedArray, isNeg: boo
 
   const avg = (avgR + avgG + avgB) / 3;
 
-  // Target values for each channel
-  let targetR = avg;
-  let targetG = avg;
-  let targetB = avg;
-
-  // OPTIMIZATION: Specifically address the blue cast in film negatives
-  if (isNeg && avgB > avgG * 1.02) {
-    const blueExcess = (avgB - avgG) / avgG;
-    // Reduce blue target more aggressively to counteract the cast
-    targetB -= avg * blueExcess * 0.6; 
-    // Slightly lift red to warm up the midtones
-    targetR += avg * blueExcess * 0.2;
-  }
-
-  // 4. Limit the maximum correction to avoid destroying natural lighting (e.g., sunsets)
-  const maxCorrection = 40;
-  const clamp = (val: number) => Math.max(-maxCorrection, Math.min(maxCorrection, val));
-
   return {
-    rOffset: clamp(Math.round(targetR - avgR)),
-    gOffset: clamp(Math.round(targetG - avgG)),
-    bOffset: clamp(Math.round(targetB - avgB))
+    rOffset: Math.round(avg - avgR),
+    gOffset: Math.round(avg - avgG),
+    bOffset: Math.round(avg - avgB)
   };
 }
 
@@ -288,6 +243,24 @@ export function processImageData(
   const centerY = height / 2;
   const maxDist = Math.sqrt(centerX * centerX + centerY * centerY);
 
+  // HSL Precomputation
+  const hsl = adjustments.hsl;
+  const hasHsl = hsl && Object.values(hsl).some(c => c.h !== 0 || c.s !== 0 || c.l !== 0);
+  let hslCenters: { h: number, adj: { h: number, s: number, l: number } }[] = [];
+  if (hasHsl && hsl) {
+    hslCenters = [
+      { h: 0, adj: hsl.reds },
+      { h: 30/360, adj: hsl.oranges },
+      { h: 60/360, adj: hsl.yellows },
+      { h: 120/360, adj: hsl.greens },
+      { h: 180/360, adj: hsl.aquas },
+      { h: 240/360, adj: hsl.blues },
+      { h: 285/360, adj: hsl.purples },
+      { h: 315/360, adj: hsl.magentas },
+      { h: 1, adj: hsl.reds }
+    ];
+  }
+
   const applyLogCurve = (v: number) => {
     let x = v / 255;
     // A more standard log curve (similar to LogC) that provides a better flat profile
@@ -307,27 +280,20 @@ export function processImageData(
 
     // 1. Invert (Improved Analog-style Inversion)
     if (isNeg) {
-      // Use a power less than 1.0 to lift shadows and midtones for a brighter look
-      const analogInvert = (v: number) => 255 * Math.pow(1 - v / 255, 0.95);
-      r = analogInvert(r);
-      g = analogInvert(g);
-      b = analogInvert(b);
+      // Linear inversion for better predictability with de-masking
+      r = 255 - r;
+      g = 255 - g;
+      b = 255 - b;
     }
 
-    // 2. Auto Mask (Improved De-masking)
+    // 2. Auto Mask (De-masking)
     if (autoMask && levels) {
       const deMask = (v: number, low: number, high: number) => {
         const range = high - low;
         if (range <= 0) return v;
         let norm = (v - low) / range;
         norm = Math.max(0, Math.min(1, norm));
-        
-        // Apply a mid-tone lift to prevent the image from being too dark
-        // This is a common requirement for film negative inversion
-        norm = Math.pow(norm, 0.85);
-
-        const curved = (3 * norm * norm - 2 * norm * norm * norm);
-        return (norm * 0.4 + curved * 0.6) * 255;
+        return Math.pow(norm, 0.85) * 255;
       };
       r = deMask(r, levels.r.low, levels.r.high);
       g = deMask(g, levels.g.low, levels.g.high);
@@ -386,6 +352,72 @@ export function processImageData(
     r = Math.max(0, Math.min(255, r));
     g = Math.max(0, Math.min(255, g));
     b = Math.max(0, Math.min(255, b));
+
+    // 6.5 HSL Adjustments
+    if (hasHsl) {
+      let rNorm = r / 255;
+      let gNorm = g / 255;
+      let bNorm = b / 255;
+      let max = Math.max(rNorm, gNorm, bNorm);
+      let min = Math.min(rNorm, gNorm, bNorm);
+      let h = 0, s = 0, l = (max + min) / 2;
+
+      if (max !== min) {
+        let d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        if (max === rNorm) {
+          h = (gNorm - bNorm) / d + (gNorm < bNorm ? 6 : 0);
+        } else if (max === gNorm) {
+          h = (bNorm - rNorm) / d + 2;
+        } else {
+          h = (rNorm - gNorm) / d + 4;
+        }
+        h /= 6;
+      }
+
+      if (s > 0) {
+        let shiftH = 0, shiftS = 0, shiftL = 0;
+        for (let j = 0; j < 8; j++) {
+          if (h >= hslCenters[j].h && h <= hslCenters[j+1].h) {
+            const range = hslCenters[j+1].h - hslCenters[j].h;
+            const t = (h - hslCenters[j].h) / range;
+            const smoothT = t * t * (3 - 2 * t);
+            const w1 = 1 - smoothT;
+            const w2 = smoothT;
+            
+            const adj1 = hslCenters[j].adj;
+            const adj2 = hslCenters[j+1].adj;
+            
+            shiftH = adj1.h * w1 + adj2.h * w2;
+            shiftS = adj1.s * w1 + adj2.s * w2;
+            shiftL = adj1.l * w1 + adj2.l * w2;
+            break;
+          }
+        }
+
+        h = (h + (shiftH / 100) * 0.08333 + 1) % 1;
+        s = Math.max(0, Math.min(1, s * (1 + shiftS / 100)));
+        if (shiftL > 0) {
+          l = l + (1 - l) * (shiftL / 100);
+        } else {
+          l = l + l * (shiftL / 100);
+        }
+
+        const hue2rgb = (p: number, q: number, t: number) => {
+          if (t < 0) t += 1;
+          if (t > 1) t -= 1;
+          if (t < 1/6) return p + (q - p) * 6 * t;
+          if (t < 1/2) return q;
+          if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+          return p;
+        };
+        const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        const p = 2 * l - q;
+        r = hue2rgb(p, q, h + 1/3) * 255;
+        g = hue2rgb(p, q, h) * 255;
+        b = hue2rgb(p, q, h - 1/3) * 255;
+      }
+    }
 
     // 7. Saturation & B&W
     if (isBW) {
@@ -517,15 +549,43 @@ export function processImageData(
     dstData[i + 3] = srcData[i + 3];
   }
 
-  // 10. Spatial Effects (Sharpen, Clarity, Color Noise Reduction, Halation)
-  if (adjustments.sharpen > 0 || adjustments.clarity !== 0 || adjustments.colorNoiseReduction > 0 || adjustments.halationIntensity > 0) {
+  // 10. Spatial Effects (Sharpen, Clarity, Noise Reduction, Halation)
+  if (adjustments.sharpen > 0 || adjustments.clarity !== 0 || adjustments.colorNoiseReduction > 0 || adjustments.luminanceNoiseReduction > 0 || adjustments.halationIntensity > 0) {
     const tempData = new Uint8ClampedArray(dstData);
     const sharpenK = adjustments.sharpen / 100;
     const clarityK = adjustments.clarity / 100;
-    const nrK = adjustments.colorNoiseReduction / 100;
+    const chromaNrK = (adjustments.colorNoiseReduction || 0) / 100;
+    const lumNrK = (adjustments.luminanceNoiseReduction || 0) / 100;
     const halIntensity = adjustments.halationIntensity / 100;
     const halRadius = Math.max(1, Math.round(adjustments.halationRadius));
     const halThreshold = adjustments.halationThreshold;
+
+    // Precompute Bilateral Filter Weights
+    const radius = 2;
+    const spatialWeights = new Float32Array(25);
+    let sIdx = 0;
+    for (let ky = -radius; ky <= radius; ky++) {
+      for (let kx = -radius; kx <= radius; kx++) {
+        spatialWeights[sIdx++] = Math.exp(-(kx * kx + ky * ky) / 8.0);
+      }
+    }
+
+    const lumWeights = new Float32Array(256);
+    const chromaWeights = new Float32Array(256);
+    
+    if (lumNrK > 0) {
+      const lumSigma = 5 + (lumNrK * 25); // 5 to 30
+      for (let i = 0; i < 256; i++) {
+        lumWeights[i] = Math.exp(-(i * i) / (2 * lumSigma * lumSigma));
+      }
+    }
+    
+    if (chromaNrK > 0) {
+      const chromaSigma = 10 + (chromaNrK * 40); // 10 to 50
+      for (let i = 0; i < 256; i++) {
+        chromaWeights[i] = Math.exp(-(i * i) / (2 * chromaSigma * chromaSigma));
+      }
+    }
 
     // Halation Pre-pass: Extract highlights with soft thresholding
     let coreMap: Float32Array | null = null;
@@ -686,47 +746,59 @@ export function processImageData(
           }
         }
 
-        // Color Noise Reduction (Edge-Aware Chroma Blur)
-        if (nrK > 0) {
+        // Advanced Noise Reduction (Capture One style Edge-Aware Bilateral Filter)
+        if (chromaNrK > 0 || lumNrK > 0) {
           const r = dstData[i], g = dstData[i + 1], b = dstData[i + 2];
           const yVal = 0.299 * r + 0.587 * g + 0.114 * b;
           const u = -0.14713 * r - 0.28886 * g + 0.436 * b;
           const v = 0.615 * r - 0.51499 * g - 0.10001 * b;
 
-          let sumU = 0, sumV = 0, totalWeight = 0;
+          let sumY = 0, sumU = 0, sumV = 0;
+          let weightSumY = 0, weightSumC = 0;
           
-          // 3x3 Edge-Aware Chroma Blur
-          for (let ky = -1; ky <= 1; ky++) {
-            for (let kx = -1; kx <= 1; kx++) {
-              const ni = ((y + ky) * width + (x + kx)) * 4;
+          // 5x5 Edge-Aware Bilateral Filter
+          let wIdx = 0;
+          for (let ky = -radius; ky <= radius; ky++) {
+            for (let kx = -radius; kx <= radius; kx++) {
+              const ny = Math.max(0, Math.min(height - 1, y + ky));
+              const nx = Math.max(0, Math.min(width - 1, x + kx));
+              const ni = (ny * width + nx) * 4;
+              
               const nr = tempData[ni], ng = tempData[ni + 1], nb = tempData[ni + 2];
               const nyVal = 0.299 * nr + 0.587 * ng + 0.114 * nb;
               
-              // Weight based on luminance difference (Edge-aware)
-              // Pixels with similar luminance are likely part of the same object
-              const lumDiff = Math.abs(yVal - nyVal);
-              const weight = 1.0 / (1.0 + lumDiff * 0.2); 
+              const lumDiff = Math.min(255, Math.floor(Math.abs(yVal - nyVal)));
+              const spatialWeight = spatialWeights[wIdx++];
               
-              const nu = -0.14713 * nr - 0.28886 * ng + 0.436 * nb;
-              const nv = 0.615 * nr - 0.51499 * ng - 0.10001 * nb;
+              // Range weight (Luminance difference)
+              // Luminance NR: preserve edges strongly.
+              if (lumNrK > 0) {
+                const weightY = spatialWeight * lumWeights[lumDiff];
+                sumY += nyVal * weightY;
+                weightSumY += weightY;
+              }
               
-              sumU += nu * weight;
-              sumV += nv * weight;
-              totalWeight += weight;
+              // Chroma NR: can be more aggressive, color bleeds less noticeably
+              if (chromaNrK > 0) {
+                const weightC = spatialWeight * chromaWeights[lumDiff];
+                
+                const nu = -0.14713 * nr - 0.28886 * ng + 0.436 * nb;
+                const nv = 0.615 * nr - 0.51499 * ng - 0.10001 * nb;
+                sumU += nu * weightC;
+                sumV += nv * weightC;
+                weightSumC += weightC;
+              }
             }
           }
 
-          const bu = sumU / totalWeight;
-          const bv = sumV / totalWeight;
-
-          // Blend original UV with blurred UV
-          const finalU = u * (1 - nrK) + bu * nrK;
-          const finalV = v * (1 - nrK) + bv * nrK;
+          const finalY = lumNrK > 0 ? (sumY / weightSumY) * lumNrK + yVal * (1 - lumNrK) : yVal;
+          const finalU = chromaNrK > 0 ? (sumU / weightSumC) * chromaNrK + u * (1 - chromaNrK) : u;
+          const finalV = chromaNrK > 0 ? (sumV / weightSumC) * chromaNrK + v * (1 - chromaNrK) : v;
 
           // Back to RGB
-          dstData[i] = yVal + 1.13983 * finalV;
-          dstData[i + 1] = yVal - 0.39465 * finalU - 0.5806 * finalV;
-          dstData[i + 2] = yVal + 2.03211 * finalU;
+          dstData[i] = finalY + 1.13983 * finalV;
+          dstData[i + 1] = finalY - 0.39465 * finalU - 0.5806 * finalV;
+          dstData[i + 2] = finalY + 2.03211 * finalU;
         }
 
         // Final clamp for spatial effects

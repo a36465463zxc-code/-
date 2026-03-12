@@ -1,5 +1,13 @@
 export type FilmType = 'color_neg' | 'bw_neg' | 'log' | 'positive';
 
+export type HSLColor = 'reds' | 'oranges' | 'yellows' | 'greens' | 'aquas' | 'blues' | 'purples' | 'magentas';
+
+export interface HSLAdjustment {
+  h: number;
+  s: number;
+  l: number;
+}
+
 export interface LUT3D {
   name: string;
   size: number;
@@ -33,11 +41,13 @@ export interface Adjustments {
   };
   sharpen: number;
   clarity: number;
+  luminanceNoiseReduction: number;
   colorNoiseReduction: number;
   halationIntensity: number;
   halationRadius: number;
   halationThreshold: number;
   vignette: number;
+  hsl?: Record<HSLColor, HSLAdjustment>;
 }
 
 export const defaultAdjustments: Adjustments = {
@@ -67,11 +77,22 @@ export const defaultAdjustments: Adjustments = {
   },
   sharpen: 0,
   clarity: 0,
+  luminanceNoiseReduction: 0,
   colorNoiseReduction: 0,
   halationIntensity: 0,
   halationRadius: 10,
   halationThreshold: 80,
   vignette: 0,
+  hsl: {
+    reds: { h: 0, s: 0, l: 0 },
+    oranges: { h: 0, s: 0, l: 0 },
+    yellows: { h: 0, s: 0, l: 0 },
+    greens: { h: 0, s: 0, l: 0 },
+    aquas: { h: 0, s: 0, l: 0 },
+    blues: { h: 0, s: 0, l: 0 },
+    purples: { h: 0, s: 0, l: 0 },
+    magentas: { h: 0, s: 0, l: 0 },
+  }
 };
 
 export interface ImageItem {
