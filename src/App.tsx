@@ -594,6 +594,10 @@ export default function App() {
     await processFiles(files);
   };
 
+  const isRotated90 = adjustments.rotation === 90 || adjustments.rotation === 270;
+  const displayWidth = isRotated90 ? originalImageData?.height : originalImageData?.width;
+  const displayHeight = isRotated90 ? originalImageData?.width : originalImageData?.height;
+
   return (
     <div 
       className="flex flex-col lg:flex-row h-screen bg-zinc-950 text-zinc-100 font-sans overflow-hidden"
@@ -657,7 +661,7 @@ export default function App() {
 
       {/* Main Area */}
       <TransformWrapper
-        key={`${selectedId}-${selectedImage?.rotation}`}
+        key={`${selectedId}-${adjustments.rotation}`}
         disabled={isCropping}
         minScale={0.1}
         maxScale={10}
@@ -827,8 +831,8 @@ export default function App() {
                 </div>
               )}
               <TransformComponent 
-                wrapperStyle={{ width: '100%', height: '100%' }}
-                contentStyle={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                wrapperStyle={{ width: '100%', height: '100%', maxWidth: '100%', maxHeight: '100%' }}
+                contentStyle={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 0, minWidth: 0 }}
               >
                   {!selectedImage ? (
                     <div className="text-center text-zinc-500">
@@ -837,90 +841,103 @@ export default function App() {
                       <p className="text-sm mt-2 opacity-60">You can also drag and drop images here</p>
                     </div>
                   ) : (
-                    <div className="relative flex items-center justify-center w-full h-full p-4 md:p-8">
-                      <ReactCrop 
-                        crop={selectedImage.crop} 
-                        onChange={(c, pc) => updateCrop(c, pc)}
-                        className="w-full h-full flex items-center justify-center"
-                        disabled={!isCropping}
-                        locked={!isCropping}
-                        style={{ display: isCropping ? 'flex' : 'none' }}
-                        ruleOfThirds={true}
-                        aspect={selectedImage.cropAspect}
+                    <div className="w-full h-full p-4 md:p-8 flex items-center justify-center overflow-hidden">
+                      <div 
+                        className="relative shadow-2xl rounded-sm"
+                        style={{ 
+                          width: displayWidth && displayHeight ? (displayWidth > displayHeight ? 'min(100%, 1200px)' : 'auto') : 'auto',
+                          height: displayWidth && displayHeight ? (displayHeight >= displayWidth ? 'min(100%, 800px)' : 'auto') : 'auto',
+                          aspectRatio: displayWidth && displayHeight ? `${displayWidth}/${displayHeight}` : 'auto',
+                          maxWidth: '100%',
+                          maxHeight: '100%'
+                        }}
                       >
-                        <canvas
-                          ref={isCropping ? canvasRef : null}
-                          className="w-full h-full object-contain shadow-2xl rounded-sm"
-                          style={{ backgroundImage: 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyEgSRC0AQAK9CGVG3UW0AAAAABJRU5ErkJggg==")' }}
-                        />
-                      </ReactCrop>
-                      <canvas
-                        ref={!isCropping ? canvasRef : null}
-                        className="w-full h-full object-contain shadow-2xl rounded-sm"
-                        style={{ display: isCropping ? 'none' : 'block', backgroundImage: 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyEgSRC0AQAK9CGVG3UW0AAAAABJRU5ErkJggg==")' }}
-                      />
-
-                    {compareMode === 'split' && !isCropping && (
-                      <>
-                        <canvas
-                          ref={originalCanvasRef}
-                          className="absolute w-full h-full object-contain shadow-2xl rounded-sm pointer-events-none"
-                          style={{ 
-                            clipPath: `inset(0 ${100 - splitPosition}% 0 0)`,
-                            backgroundImage: 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyEgSRC0AQAK9CGVG3UW0AAAAABJRU5ErkJggg==")' 
-                          }}
-                        />
-                        <div 
-                          className="absolute top-0 bottom-0 w-1 bg-white cursor-ew-resize shadow-[0_0_4px_rgba(0,0,0,0.5)] z-10 flex items-center justify-center"
-                          style={{ left: `${splitPosition}%`, transform: 'translateX(-50%)' }}
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            const container = e.currentTarget.parentElement;
-                            if (!container) return;
-                            
-                            const handleMouseMove = (moveEvent: MouseEvent) => {
-                              const rect = container.getBoundingClientRect();
-                              const x = Math.max(0, Math.min(moveEvent.clientX - rect.left, rect.width));
-                              setSplitPosition((x / rect.width) * 100);
-                            };
-                            const handleMouseUp = () => {
-                              document.removeEventListener('mousemove', handleMouseMove);
-                              document.removeEventListener('mouseup', handleMouseUp);
-                            };
-                            document.addEventListener('mousemove', handleMouseMove);
-                            document.addEventListener('mouseup', handleMouseUp);
-                          }}
-                          onTouchStart={(e) => {
-                            e.stopPropagation();
-                            const container = e.currentTarget.parentElement;
-                            if (!container) return;
-                            
-                            const handleTouchMove = (moveEvent: TouchEvent) => {
-                              const rect = container.getBoundingClientRect();
-                              const x = Math.max(0, Math.min(moveEvent.touches[0].clientX - rect.left, rect.width));
-                              setSplitPosition((x / rect.width) * 100);
-                            };
-                            const handleTouchEnd = () => {
-                              document.removeEventListener('touchmove', handleTouchMove);
-                              document.removeEventListener('touchend', handleTouchEnd);
-                            };
-                            document.addEventListener('touchmove', handleTouchMove, { passive: false });
-                            document.addEventListener('touchend', handleTouchEnd);
-                          }}
+                      {isCropping ? (
+                        <ReactCrop 
+                          crop={selectedImage.crop} 
+                          onChange={(c, pc) => updateCrop(c, pc)}
+                          className="w-full h-full"
+                          ruleOfThirds={true}
+                          aspect={selectedImage.cropAspect}
                         >
-                          <div className="w-6 h-6 bg-white rounded-full shadow-md flex items-center justify-center pointer-events-none">
-                            <div className="w-4 h-4 text-zinc-800">
-                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M8 9l-4 3 4 3M16 9l4 3-4 3" />
-                              </svg>
-                            </div>
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
+                          <canvas
+                            ref={canvasRef}
+                            className="w-full h-full block"
+                          />
+                        </ReactCrop>
+                      ) : (
+                        <>
+                          <canvas
+                            ref={canvasRef}
+                            className="w-full h-full block"
+                            style={{ backgroundImage: 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyEgSRC0AQAK9CGVG3UW0AAAAABJRU5ErkJggg==")' }}
+                          />
+                          
+                          {compareMode === 'split' && (
+                            <>
+                              <canvas
+                                ref={originalCanvasRef}
+                                className="absolute inset-0 w-full h-full pointer-events-none block"
+                                style={{ 
+                                  clipPath: `inset(0 ${100 - splitPosition}% 0 0)`,
+                                  backgroundImage: 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhw1gGGYhAGBZIA/nYDCgBDAm9BGDWAAJyEgSRC0AQAK9CGVG3UW0AAAAABJRU5ErkJggg==")' 
+                                }}
+                              />
+                              <div 
+                                className="absolute top-0 bottom-0 w-1 bg-white cursor-ew-resize shadow-[0_0_4px_rgba(0,0,0,0.5)] z-10 flex items-center justify-center"
+                                style={{ left: `${splitPosition}%`, transform: 'translateX(-50%)' }}
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  const container = e.currentTarget.parentElement;
+                                  if (!container) return;
+                                  
+                                  const handleMouseMove = (moveEvent: MouseEvent) => {
+                                    const rect = container.getBoundingClientRect();
+                                    const x = Math.max(0, Math.min(moveEvent.clientX - rect.left, rect.width));
+                                    setSplitPosition((x / rect.width) * 100);
+                                  };
+                                  const handleMouseUp = () => {
+                                    document.removeEventListener('mousemove', handleMouseMove);
+                                    document.removeEventListener('mouseup', handleMouseUp);
+                                  };
+                                  document.addEventListener('mousemove', handleMouseMove);
+                                  document.addEventListener('mouseup', handleMouseUp);
+                                }}
+                                onTouchStart={(e) => {
+                                  e.stopPropagation();
+                                  const container = e.currentTarget.parentElement;
+                                  if (!container) return;
+                                  
+                                  const handleTouchMove = (moveEvent: TouchEvent) => {
+                                    const rect = container.getBoundingClientRect();
+                                    const x = Math.max(0, Math.min(moveEvent.touches[0].clientX - rect.left, rect.width));
+                                    setSplitPosition((x / rect.width) * 100);
+                                  };
+                                  const handleTouchEnd = () => {
+                                    document.removeEventListener('touchmove', handleTouchMove);
+                                    document.removeEventListener('touchend', handleTouchEnd);
+                                  };
+                                  document.addEventListener('touchmove', handleTouchMove, { passive: false });
+                                  document.addEventListener('touchend', handleTouchEnd);
+                                }}
+                              >
+                                <div className="w-6 h-6 bg-white rounded-full shadow-md flex items-center justify-center pointer-events-none border border-zinc-200">
+                                  <div className="w-4 h-4 text-zinc-800">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                      <path d="M8 9l-4 3 4 3M16 9l4 3-4 3" />
+                                    </svg>
+                                  </div>
+                                </div>
+                              </div>
+                            </>
+                          )}
+                        </>
+                      )}
+                      </div>
+                    </div>
+                  )
+                }
               </TransformComponent>
             </div>
           </div>
@@ -1065,7 +1082,10 @@ export default function App() {
                   {FILM_PRESETS.map(preset => (
                     <button
                       key={preset.id}
-                      onClick={() => updateAdjustments({ ...defaultAdjustments, ...preset.adjustments, rotation: adjustments.rotation })}
+                      onClick={() => {
+                        const newAdj = { ...defaultAdjustments, ...preset.adjustments, rotation: adjustments.rotation };
+                        updateAdjustments(newAdj);
+                      }}
                       className="text-left p-2 rounded-lg bg-zinc-800/50 hover:bg-zinc-800 border border-zinc-700/50 hover:border-zinc-600 transition-all group"
                     >
                       <p className="text-xs font-semibold text-zinc-200 group-hover:text-indigo-400 transition-colors">{preset.name}</p>
@@ -1480,7 +1500,7 @@ export default function App() {
             Sync to All Images
           </button>
           <button
-            onClick={() => updateAdjustments(defaultAdjustments)}
+            onClick={() => updateAdjustments({ ...defaultAdjustments, rotation: adjustments.rotation })}
             disabled={!selectedImage}
             className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-300 rounded-lg transition-colors text-sm font-medium"
           >
