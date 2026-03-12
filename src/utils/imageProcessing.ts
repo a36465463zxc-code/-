@@ -598,15 +598,16 @@ export function processImageData(
         const r = tempData[i], g = tempData[i + 1], b = tempData[i + 2];
         const lum = 0.299 * r + 0.587 * g + 0.114 * b;
         
-        // Dynamic Highlight Extension: smoother extraction to prevent hard edges
+        // Dynamic Highlight Extraction
+        // Only extract very bright areas to prevent red washing over the whole image
         let weight = 0;
-        const softThreshold = Math.max(0, halThreshold - 50); // Even wider soft edge
+        const softThreshold = Math.max(0, halThreshold - 30); 
         if (lum > softThreshold) {
           const range = 255 - softThreshold;
           if (range > 0) {
             const normalized = Math.min(1, (lum - softThreshold) / range);
-            // Softer power curve so it spreads more naturally and continuously
-            weight = Math.pow(normalized, 1.2);
+            // Steeper power curve so it only really kicks in at the very top
+            weight = Math.pow(normalized, 2.0);
           } else {
             weight = 1.0;
           }
@@ -626,11 +627,10 @@ export function processImageData(
       const baseRadius = Math.max(1, halRadius * scale);
       
       // 3 passes of box blur approximates a true Gaussian blur very well.
-      // We increase the radii significantly to get that wide, cinematic 800T diffusion.
       const radii = [
-        Math.max(1, Math.round(baseRadius * 0.8)), // Core Glow (small)
-        Math.max(2, Math.round(baseRadius * 2.5)), // Diffused Bloom (medium)
-        Math.max(3, Math.round(baseRadius * 6.0))  // Large Halation (large)
+        Math.max(1, Math.round(baseRadius * 0.5)), // Core Glow (small)
+        Math.max(1, Math.round(baseRadius * 1.5)), // Red Halation Fringe (medium)
+        Math.max(2, Math.round(baseRadius * 3.0))  // Diffused Bloom (large)
       ];
 
       let currentMap = new Float32Array(halMap);
@@ -678,25 +678,26 @@ export function processImageData(
              return Math.min(255, base + blend);
           };
 
-          // 1. Core Glow: Screen mode, keeps original color but reduces green/blue to avoid washing out to white
-          const coreIntensity = halIntensity * 0.7;
+          // 1. Core Glow: Screen mode, keeps original color
+          const coreIntensity = halIntensity * 0.6;
           let r = blendScreen(dstData[i], rCore * coreIntensity);
-          let g = blendScreen(dstData[i + 1], gCore * coreIntensity * 0.6);
-          let b = blendScreen(dstData[i + 2], bCore * coreIntensity * 0.3);
+          let g = blendScreen(dstData[i + 1], gCore * coreIntensity);
+          let b = blendScreen(dstData[i + 2], bCore * coreIntensity);
           
-          // 2. Diffused Bloom: Add mode, Chromatic shift to rich orange
-          const midIntensity = halIntensity * 0.9;
+          // 2. Red Halation Fringe (Mid map): Add mode, pure red/orange
+          // This creates the tight red edge around highlights
+          const midIntensity = halIntensity * 1.2;
           const midLum = (rMid * 0.299 + gMid * 0.587 + bMid * 0.114);
-          r = blendAdd(r, midLum * midIntensity * 2.2);
-          g = blendAdd(g, midLum * midIntensity * 0.4); // Add some green for a richer orange transition
-          b = blendAdd(b, midLum * midIntensity * 0.05); // Tiny bit of blue to prevent pure flatness
-          
-          // 3. Large Halation: Add mode, Chromatic shift to deep cinematic red
-          const largeIntensity = halIntensity * 0.7;
-          const largeLum = (rLarge * 0.299 + gLarge * 0.587 + bLarge * 0.114);
-          r = blendAdd(r, largeLum * largeIntensity * 2.5);
-          g = blendAdd(g, largeLum * largeIntensity * 0.05); // Almost pure red, tiny bit of green for depth
+          r = blendAdd(r, midLum * midIntensity * 2.0);
+          g = blendAdd(g, midLum * midIntensity * 0.1); 
           b = blendAdd(b, 0); 
+          
+          // 3. Diffused Bloom (Large map): Soft overall glow, slightly warm but mostly neutral
+          const largeIntensity = halIntensity * 0.4;
+          const largeLum = (rLarge * 0.299 + gLarge * 0.587 + bLarge * 0.114);
+          r = blendScreen(r, largeLum * largeIntensity * 1.2);
+          g = blendScreen(g, largeLum * largeIntensity * 1.0);
+          b = blendScreen(b, largeLum * largeIntensity * 0.8); 
           
           dstData[i] = r;
           dstData[i + 1] = g;

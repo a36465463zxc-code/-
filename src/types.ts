@@ -81,7 +81,7 @@ export const defaultAdjustments: Adjustments = {
   colorNoiseReduction: 0,
   halationIntensity: 0,
   halationRadius: 10,
-  halationThreshold: 80,
+  halationThreshold: 220,
   vignette: 0,
   hsl: {
     reds: { h: 0, s: 0, l: 0 },

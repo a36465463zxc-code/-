@@ -206,9 +206,9 @@ export const FILM_PRESETS: FilmPreset[] = [
       tint: 10,
       contrast: 15,
       saturation: 12,
-      halationIntensity: 45,
-      halationRadius: 15,
-      halationThreshold: 70,
+      halationIntensity: 60,
+      halationRadius: 8,
+      halationThreshold: 210,
       vignette: 0
     }
   },
@@ -222,9 +222,9 @@ export const FILM_PRESETS: FilmPreset[] = [
       tint: 2,
       contrast: 12,
       saturation: 10,
-      halationIntensity: 30,
-      halationRadius: 12,
-      halationThreshold: 75,
+      halationIntensity: 40,
+      halationRadius: 6,
+      halationThreshold: 220,
       vignette: 0
     }
   }

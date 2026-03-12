@@ -1457,7 +1457,7 @@ export default function App() {
                   icon={<Minimize2 className="w-4 h-4 text-zinc-400" />} 
                   value={adjustments.halationThreshold} 
                   min={0} max={255} 
-                  defaultValue={80}
+                  defaultValue={220}
                   onChange={(v) => updateAdjustments({ halationThreshold: v })} 
                 />
                   </div>
