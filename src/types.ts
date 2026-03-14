@@ -1,3 +1,34 @@
+export interface LabStats {
+  lMean: number;
+  lStd: number;
+  aMean: number;
+  aStd: number;
+  bMean: number;
+  bStd: number;
+  satMean: number;
+  shadowA: number;
+  shadowB: number;
+  midtoneA: number;
+  midtoneB: number;
+  highlightA: number;
+  highlightB: number;
+  lMin: number;
+  lMax: number;
+  foliageA: number;
+  foliageB: number;
+  foliageL: number;
+  foliageCount: number;
+}
+
+export interface ColorStats {
+  rMean: number;
+  rStd: number;
+  gMean: number;
+  gStd: number;
+  bMean: number;
+  bStd: number;
+}
+
 export type FilmType = 'color_neg' | 'bw_neg' | 'log' | 'positive';
 
 export type HSLColor = 'reds' | 'oranges' | 'yellows' | 'greens' | 'aquas' | 'blues' | 'purples' | 'magentas';
@@ -48,6 +79,9 @@ export interface Adjustments {
   halationThreshold: number;
   vignette: number;
   hsl?: Record<HSLColor, HSLAdjustment>;
+  colorMatchEnabled: boolean;
+  colorMatchIntensity: number;
+  colorMatchSaturation: number;
 }
 
 export const defaultAdjustments: Adjustments = {
@@ -92,7 +126,10 @@ export const defaultAdjustments: Adjustments = {
     blues: { h: 0, s: 0, l: 0 },
     purples: { h: 0, s: 0, l: 0 },
     magentas: { h: 0, s: 0, l: 0 },
-  }
+  },
+  colorMatchEnabled: false,
+  colorMatchIntensity: 50,
+  colorMatchSaturation: 50,
 };
 
 export interface ImageItem {
@@ -102,4 +139,6 @@ export interface ImageItem {
   adjustments: Adjustments;
   crop?: any;
   cropAspect?: number;
+  referenceImage?: string;
+  referenceStats?: LabStats;
 }

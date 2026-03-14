@@ -1,4 +1,4 @@
-import { Adjustments } from '../types';
+import { Adjustments, LabStats } from '../types';
 
 function applyBoxBlur(src: Float32Array, dst: Float32Array, temp: Float32Array, w: number, h: number, radius: number) {
   if (radius < 1) {
@@ -65,6 +65,59 @@ function applyBoxBlur(src: Float32Array, dst: Float32Array, temp: Float32Array, 
       bSum = bSum - temp[pIdx + 2] + temp[nIdx + 2];
     }
   }
+}
+
+export function calculateBaseStats(srcData: Uint8ClampedArray, isNeg: boolean, autoMask: boolean, levels: any): import('../types').ColorStats {
+  let rSum = 0, gSum = 0, bSum = 0;
+  const count = srcData.length / 4;
+
+  const getPixel = (i: number) => {
+    let r = srcData[i];
+    let g = srcData[i + 1];
+    let b = srcData[i + 2];
+    if (isNeg) {
+      r = 255 - r;
+      g = 255 - g;
+      b = 255 - b;
+    }
+    if (autoMask && levels) {
+      const deMask = (v: number, low: number, high: number) => {
+        const range = high - low;
+        if (range <= 0) return v;
+        let norm = (v - low) / range;
+        return Math.pow(Math.max(0, Math.min(1, norm)), 0.85) * 255;
+      };
+      r = deMask(r, levels.r.low, levels.r.high);
+      g = deMask(g, levels.g.low, levels.g.high);
+      b = deMask(b, levels.b.low, levels.b.high);
+    }
+    return [r, g, b];
+  };
+
+  for (let i = 0; i < srcData.length; i += 4) {
+    const [r, g, b] = getPixel(i);
+    rSum += r;
+    gSum += g;
+    bSum += b;
+  }
+
+  const rMean = rSum / count;
+  const gMean = gSum / count;
+  const bMean = bSum / count;
+
+  let rVar = 0, gVar = 0, bVar = 0;
+  for (let i = 0; i < srcData.length; i += 4) {
+    const [r, g, b] = getPixel(i);
+    rVar += (r - rMean) ** 2;
+    gVar += (g - gMean) ** 2;
+    bVar += (b - bMean) ** 2;
+  }
+
+  return {
+    rMean, rStd: Math.sqrt(rVar / count),
+    gMean, gStd: Math.sqrt(gVar / count),
+    bMean, bStd: Math.sqrt(bVar / count)
+  };
 }
 
 export function calculateLevels(srcData: Uint8ClampedArray, isNeg: boolean) {
@@ -135,9 +188,9 @@ export function calculateAutoWhiteBalance(srcData: Uint8ClampedArray, isNeg: boo
     }
 
     if (autoMask && levels) {
-      r = ((r - levels.r.low) / (levels.r.high - levels.r.low)) * 255;
-      g = ((g - levels.g.low) / (levels.g.high - levels.g.low)) * 255;
-      b = ((b - levels.b.low) / (levels.b.high - levels.b.low)) * 255;
+      r = levels.r.high > levels.r.low ? ((r - levels.r.low) / (levels.r.high - levels.r.low)) * 255 : r;
+      g = levels.g.high > levels.g.low ? ((g - levels.g.low) / (levels.g.high - levels.g.low)) * 255 : g;
+      b = levels.b.high > levels.b.low ? ((b - levels.b.low) / (levels.b.high - levels.b.low)) * 255 : b;
     }
 
     const lum = 0.299 * r + 0.587 * g + 0.114 * b;
@@ -280,13 +333,188 @@ export function getHslColorRange(h: number): import('../types').HSLColor {
   return 'magentas';
 }
 
+function rgbToLab(r: number, g: number, b: number): [number, number, number] {
+  let rL = r / 255; let gL = g / 255; let bL = b / 255;
+  rL = rL > 0.04045 ? Math.pow((rL + 0.055) / 1.055, 2.4) : rL / 12.92;
+  gL = gL > 0.04045 ? Math.pow((gL + 0.055) / 1.055, 2.4) : gL / 12.92;
+  bL = bL > 0.04045 ? Math.pow((bL + 0.055) / 1.055, 2.4) : bL / 12.92;
+
+  let x = (rL * 0.4124 + gL * 0.3576 + bL * 0.1805) / 0.95047;
+  let y = (rL * 0.2126 + gL * 0.7152 + bL * 0.0722) / 1.00000;
+  let z = (rL * 0.0193 + gL * 0.1192 + bL * 0.9505) / 1.08883;
+
+  x = x > 0.008856 ? Math.pow(x, 1/3) : (7.787 * x) + 16/116;
+  y = y > 0.008856 ? Math.pow(y, 1/3) : (7.787 * y) + 16/116;
+  z = z > 0.008856 ? Math.pow(z, 1/3) : (7.787 * z) + 16/116;
+
+  return [(116 * y) - 16, 500 * (x - y), 200 * (y - z)];
+}
+
+function labToRgb(l: number, a: number, b: number): [number, number, number] {
+  let y = (l + 16) / 116;
+  let x = a / 500 + y;
+  let z = y - b / 200;
+
+  let x3 = x * x * x; let y3 = y * y * y; let z3 = z * z * z;
+
+  x = ((x3 > 0.008856) ? x3 : (x - 16/116) / 7.787) * 0.95047;
+  y = ((y3 > 0.008856) ? y3 : (y - 16/116) / 7.787) * 1.00000;
+  z = ((z3 > 0.008856) ? z3 : (z - 16/116) / 7.787) * 1.08883;
+
+  let rOut = x *  3.2406 + y * -1.5372 + z * -0.4986;
+  let gOut = x * -0.9689 + y *  1.8758 + z *  0.0415;
+  let bOut = x *  0.0557 + y * -0.2040 + z *  1.0570;
+
+  rOut = rOut > 0.0031308 ? 1.055 * Math.pow(rOut, 1/2.4) - 0.055 : 12.92 * rOut;
+  gOut = gOut > 0.0031308 ? 1.055 * Math.pow(gOut, 1/2.4) - 0.055 : 12.92 * gOut;
+  bOut = bOut > 0.0031308 ? 1.055 * Math.pow(bOut, 1/2.4) - 0.055 : 12.92 * bOut;
+
+  return [
+    Math.max(0, Math.min(255, rOut * 255)),
+    Math.max(0, Math.min(255, gOut * 255)),
+    Math.max(0, Math.min(255, bOut * 255))
+  ];
+}
+
+export function calculateLabStats(imageData: Uint8ClampedArray, step: number = 4): LabStats {
+  let lSum = 0, aSum = 0, bSum = 0;
+  let satSum = 0;
+  let numPixels = 0;
+  
+  let shadowASum = 0, shadowBSum = 0, shadowCount = 0;
+  let midtoneASum = 0, midtoneBSum = 0, midtoneCount = 0;
+  let highlightASum = 0, highlightBSum = 0, highlightCount = 0;
+  
+  let foliageASum = 0, foliageBSum = 0, foliageLSum = 0, foliageCount = 0;
+  
+  const lHist = new Int32Array(101);
+  
+  // First pass: Calculate means and zone stats
+  for (let i = 0; i < imageData.length; i += step) {
+    const r = imageData[i];
+    const g = imageData[i+1];
+    const b = imageData[i+2];
+    const [l, a, labB] = rgbToLab(r, g, b);
+    const { h, s, l: hslL } = rgbToHsl(r, g, b);
+    
+    lSum += l;
+    aSum += a;
+    bSum += labB;
+    satSum += Math.sqrt(a * a + labB * labB);
+    numPixels++;
+    
+    lHist[Math.max(0, Math.min(100, Math.round(l)))]++;
+    
+    if (l < 33) {
+      shadowASum += a; shadowBSum += labB; shadowCount++;
+    } else if (l > 66) {
+      highlightASum += a; highlightBSum += labB; highlightCount++;
+    } else {
+      midtoneASum += a; midtoneBSum += labB; midtoneCount++;
+    }
+    
+    const hueDeg = h * 360;
+    if (hueDeg >= 40 && hueDeg <= 160 && s > 0.1) {
+      foliageASum += a; foliageBSum += labB; foliageLSum += l; foliageCount++;
+    }
+  }
+  
+  const lMean = lSum / numPixels;
+  const aMean = aSum / numPixels;
+  const bMean = bSum / numPixels;
+  const satMean = satSum / numPixels;
+  
+  let lMin = 0, lMax = 100;
+  let count = 0;
+  const targetMin = numPixels * 0.01;
+  const targetMax = numPixels * 0.99;
+  for (let i = 0; i <= 100; i++) {
+    count += lHist[i];
+    if (count >= targetMin && lMin === 0) lMin = i;
+    if (count >= targetMax && lMax === 100) { lMax = i; break; }
+  }
+  if (lMin === 0 && lHist[0] < targetMin) lMin = 0; // fallback
+  
+  // Second pass: Calculate standard deviations
+  let lSqDiff = 0, aSqDiff = 0, bSqDiff = 0;
+  for (let i = 0; i < imageData.length; i += step) {
+    const [l, a, labB] = rgbToLab(imageData[i], imageData[i+1], imageData[i+2]);
+    lSqDiff += (l - lMean) * (l - lMean);
+    aSqDiff += (a - aMean) * (a - aMean);
+    bSqDiff += (labB - bMean) * (labB - bMean);
+  }
+  
+  return {
+    lMean,
+    lStd: Math.sqrt(lSqDiff / numPixels),
+    aMean,
+    aStd: Math.sqrt(aSqDiff / numPixels),
+    bMean,
+    bStd: Math.sqrt(bSqDiff / numPixels),
+    satMean,
+    shadowA: shadowCount > 0 ? shadowASum / shadowCount : aMean,
+    shadowB: shadowCount > 0 ? shadowBSum / shadowCount : bMean,
+    midtoneA: midtoneCount > 0 ? midtoneASum / midtoneCount : aMean,
+    midtoneB: midtoneCount > 0 ? midtoneBSum / midtoneCount : bMean,
+    highlightA: highlightCount > 0 ? highlightASum / highlightCount : aMean,
+    highlightB: highlightCount > 0 ? highlightBSum / highlightCount : bMean,
+    lMin,
+    lMax,
+    foliageA: foliageCount > 0 ? foliageASum / foliageCount : aMean,
+    foliageB: foliageCount > 0 ? foliageBSum / foliageCount : bMean,
+    foliageL: foliageCount > 0 ? foliageLSum / foliageCount : lMean,
+    foliageCount
+  };
+}
+
+export function exportAsCubeLUT(
+  size: number,
+  adjustments: Adjustments,
+  levels: any,
+  refStats?: LabStats | null,
+  srcStats?: LabStats | null
+): string {
+  const numPixels = size * size * size;
+  const data = new Uint8ClampedArray(numPixels * 4);
+  
+  let i = 0;
+  for (let b = 0; b < size; b++) {
+    for (let g = 0; g < size; g++) {
+      for (let r = 0; r < size; r++) {
+        data[i * 4] = Math.round((r / (size - 1)) * 255);
+        data[i * 4 + 1] = Math.round((g / (size - 1)) * 255);
+        data[i * 4 + 2] = Math.round((b / (size - 1)) * 255);
+        data[i * 4 + 3] = 255;
+        i++;
+      }
+    }
+  }
+
+  const lutAdjustments = { ...adjustments, vignette: 0 };
+  
+  const processedImageData = processImageData(data, numPixels, 1, lutAdjustments, levels, refStats, srcStats);
+  const processedData = processedImageData.data.data;
+  
+  let cube = `TITLE "Exported Color Match LUT"\nLUT_3D_SIZE ${size}\n\n`;
+  for (let j = 0; j < numPixels; j++) {
+    const r = (processedData[j * 4] / 255).toFixed(6);
+    const g = (processedData[j * 4 + 1] / 255).toFixed(6);
+    const b = (processedData[j * 4 + 2] / 255).toFixed(6);
+    cube += `${r} ${g} ${b}\n`;
+  }
+  
+  return cube;
+}
+
 export function processImageData(
   srcData: Uint8ClampedArray,
   width: number,
   height: number,
   adjustments: Adjustments,
-  levels: any
-) {
+  levels: any,
+  refStats?: LabStats | null,
+  srcStats?: LabStats | null
+): { data: ImageData, srcStats: LabStats | null } {
   const dstImageData = new ImageData(width, height);
   const dstData = dstImageData.data;
   const { filmType, autoMask, exposure, temperature, tint, contrast, saturation, rOffset, gOffset, bOffset, shadows, highlights, whites, blacks, gamma, vignette } = adjustments;
@@ -330,8 +558,6 @@ export function processImageData(
 
   const applyLogCurve = (v: number) => {
     let x = v / 255;
-    // A more standard log curve (similar to LogC) that provides a better flat profile
-    // Lifts shadows significantly and compresses highlights smoothly
     if (x > 0.010591) {
       x = 0.244161 * Math.log2(5.555556 * x + 0.052272) + 0.385537;
     } else {
@@ -340,20 +566,40 @@ export function processImageData(
     return Math.max(0, Math.min(1, x)) * 255;
   };
 
-  for (let i = 0; i < srcData.length; i += 4) {
-    let r = srcData[i];
-    let g = srcData[i + 1];
-    let b = srcData[i + 2];
-
-    // 1. Invert (Improved Analog-style Inversion)
-    if (isNeg) {
-      // Linear inversion for better predictability with de-masking
-      r = 255 - r;
-      g = 255 - g;
-      b = 255 - b;
+  const applyBasic = (val: number) => {
+    let v = Math.max(0, Math.min(1, val / 255));
+    
+    // Gamma
+    if (gammaValue !== 1 && v > 0) {
+      v = Math.pow(v, 1 / gammaValue);
     }
 
-    // 2. Auto Mask (De-masking)
+    // Blacks & Whites (Linear stretch at ends)
+    if (blackFactor !== 0) {
+      v = v + blackFactor * (1 - v) * (1 - Math.pow(v, 0.5));
+    }
+    if (whiteFactor !== 0) {
+      v = v + whiteFactor * v * (1 - Math.pow(1 - v, 0.5));
+    }
+
+    // Shadows & Highlights (Curve-like)
+    if (shadowFactor !== 0) {
+      v = v + shadowFactor * Math.pow(1 - v, 3) * v;
+    }
+    if (highlightFactor !== 0) {
+      v = v + highlightFactor * Math.pow(v, 3) * (1 - v);
+    }
+
+    return v * 255;
+  };
+
+  const applyBaseAdjustments = (rIn: number, gIn: number, bIn: number): [number, number, number] => {
+    let r = rIn, g = gIn, b = bIn;
+    // 1. Invert
+    if (isNeg) {
+      r = 255 - r; g = 255 - g; b = 255 - b;
+    }
+    // 2. Auto Mask
     if (autoMask && levels) {
       const deMask = (v: number, low: number, high: number) => {
         const range = high - low;
@@ -366,57 +612,166 @@ export function processImageData(
       g = deMask(g, levels.g.low, levels.g.high);
       b = deMask(b, levels.b.low, levels.b.high);
     }
-
     // 3. Exposure & RGB Offsets
     r = r * expMult + rOffset;
     g = g * expMult + gOffset;
     b = b * expMult + bOffset;
-
     // 4. White Balance
-    r += temperature;
-    b -= temperature;
-    g += tint;
-    r -= tint / 2;
-    b -= tint / 2;
-
+    r += temperature; b -= temperature;
+    g += tint; r -= tint / 2; b -= tint / 2;
     // 5. Contrast
     r = contrastFactor * (r - 128) + 128;
     g = contrastFactor * (g - 128) + 128;
     b = contrastFactor * (b - 128) + 128;
+    // 6. Basic Adjustments
+    r = applyBasic(r); g = applyBasic(g); b = applyBasic(b);
+    return [
+      Math.max(0, Math.min(255, r)),
+      Math.max(0, Math.min(255, g)),
+      Math.max(0, Math.min(255, b))
+    ];
+  };
 
-    // 6. Basic Adjustments (Whites, Blacks, Shadows, Highlights, Gamma)
-    const applyBasic = (val: number) => {
-      let v = val / 255;
+  let computedSrcStats: LabStats | null = srcStats || null;
+  if (adjustments.colorMatchEnabled && refStats && !computedSrcStats) {
+    const step = Math.max(4, Math.floor(srcData.length / 40000) * 4);
+    
+    // Create a temporary array to hold the base-adjusted image data
+    const tempImageData = new Uint8ClampedArray(srcData.length);
+    for (let i = 0; i < srcData.length; i += 4) {
+      const [r, g, b] = applyBaseAdjustments(srcData[i], srcData[i+1], srcData[i+2]);
+      tempImageData[i] = r;
+      tempImageData[i+1] = g;
+      tempImageData[i+2] = b;
+      tempImageData[i+3] = srcData[i+3];
+    }
+    
+    computedSrcStats = calculateLabStats(tempImageData, step);
+  }
+
+  for (let i = 0; i < srcData.length; i += 4) {
+    let [r, g, b] = applyBaseAdjustments(srcData[i], srcData[i + 1], srcData[i + 2]);
+
+    // Color Match (Color Grading Transfer)
+    if (adjustments.colorMatchEnabled && refStats && computedSrcStats) {
+      const intensity = adjustments.colorMatchIntensity / 100;
+      const satIntensity = adjustments.colorMatchSaturation / 100;
       
-      // Gamma
-      if (gammaValue !== 1 && v > 0) {
-        v = Math.pow(v, 1 / gammaValue);
+      const [origL, origA, origB] = rgbToLab(r, g, b);
+      const { h, s, l: hslL } = rgbToHsl(r, g, b);
+      const hueDeg = h * 360;
+      
+      // 1. Tone Matching (Black Point, Exposure, and Contrast)
+      let newL = origL;
+      if (computedSrcStats.lMax > computedSrcStats.lMin) {
+         let lNorm = (origL - computedSrcStats.lMin) / (computedSrcStats.lMax - computedSrcStats.lMin);
+         lNorm = Math.max(0, Math.min(1, lNorm));
+         
+         // Apply a subtle S-curve to the normalized lightness to improve contrast
+         // Blend between linear and S-curve based on standard deviation differences
+         const contrastRatio = Math.max(0.5, Math.min(2.0, refStats.lStd / computedSrcStats.lStd));
+         const curveWeight = Math.max(0, Math.min(1, (contrastRatio - 1) * 1.5)); // Use S-curve if ref has higher contrast
+         
+         if (curveWeight > 0) {
+             const sCurve = lNorm < 0.5 ? 2 * lNorm * lNorm : 1 - Math.pow(-2 * lNorm + 2, 2) / 2;
+             lNorm = lNorm * (1 - curveWeight) + sCurve * curveWeight;
+         }
+         
+         newL = refStats.lMin + lNorm * (refStats.lMax - refStats.lMin);
       }
-
-      // Blacks & Whites (Linear stretch at ends)
-      if (blackFactor !== 0) {
-        v = v + blackFactor * (1 - v) * (1 - Math.pow(v, 0.5));
+      
+      // Global exposure boost / midtone lift
+      const lShift = refStats.lMean - computedSrcStats.lMean;
+      const lMidtoneWeight = Math.max(0, 1 - Math.abs(newL - 50) / 50); 
+      newL = newL + lShift * lMidtoneWeight * 0.8;
+      
+      // 2. Color (a, b) Transfer by Luminance Zones with Highlight/Shadow Protection
+      const wS = Math.max(0, 1 - origL / 40); 
+      const wH = Math.max(0, (origL - 60) / 40); 
+      const wM = Math.max(0, 1 - wS - wH);
+      
+      // Protect extreme highlights and shadows from color casts (Neutral Protection)
+      const colorRollOff = Math.min(1, origL / 15) * Math.min(1, (100 - origL) / 15);
+      
+      const shiftA_S = (refStats.shadowA - computedSrcStats.shadowA) * colorRollOff;
+      const shiftB_S = (refStats.shadowB - computedSrcStats.shadowB) * colorRollOff;
+      const shiftA_M = (refStats.midtoneA - computedSrcStats.midtoneA) * colorRollOff;
+      const shiftB_M = (refStats.midtoneB - computedSrcStats.midtoneB) * colorRollOff;
+      const shiftA_H = (refStats.highlightA - computedSrcStats.highlightA) * colorRollOff;
+      const shiftB_H = (refStats.highlightB - computedSrcStats.highlightB) * colorRollOff;
+      
+      let newA = origA + (wS * shiftA_S + wM * shiftA_M + wH * shiftA_H);
+      let newB = origB + (wS * shiftB_S + wM * shiftB_M + wH * shiftB_H);
+      
+      // 3. Targeted HSL (Foliage/Environment)
+      if (refStats.foliageCount > 0) {
+         let hw = 0;
+         if (hueDeg >= 30 && hueDeg <= 170) {
+             hw = Math.sin(((Math.min(Math.max(hueDeg, 30), 170) - 30) / 140) * Math.PI);
+         }
+         let sw = Math.min(1, Math.max(0, (s - 0.02) / 0.08));
+         const fWeight = hw * sw;
+         
+         if (fWeight > 0) {
+             newA = newA * (1 - fWeight) + refStats.foliageA * fWeight;
+             newB = newB * (1 - fWeight) + refStats.foliageB * fWeight;
+             if (refStats.foliageL > computedSrcStats.foliageL) {
+                 newL = newL * (1 - fWeight) + Math.max(newL, refStats.foliageL) * fWeight;
+             }
+         }
       }
-      if (whiteFactor !== 0) {
-        v = v + whiteFactor * v * (1 - Math.pow(1 - v, 0.5));
+      
+      // 4. Vibrance / Smart Saturation Transfer
+      if (computedSrcStats.satMean > 0) {
+        const satRatio = Math.max(0.6, Math.min(1.5, refStats.satMean / computedSrcStats.satMean));
+        // Vibrance: apply less saturation boost to already saturated pixels
+        const currentSat = Math.sqrt(newA * newA + newB * newB);
+        const satWeight = satRatio > 1 ? Math.max(0, 1 - currentSat / 100) : 1;
+        const finalSatRatio = 1 + (satRatio - 1) * satWeight;
+        
+        newA *= finalSatRatio;
+        newB *= finalSatRatio;
       }
-
-      // Shadows & Highlights (Curve-like)
-      if (shadowFactor !== 0) {
-        v = v + shadowFactor * Math.pow(1 - v, 3) * v;
+      
+      // 5. Semantic Skin Tone Protection
+      let hueDist = Math.abs(hueDeg - 25);
+      if (hueDist > 180) hueDist = 360 - hueDist;
+      let skinWeight = 0;
+      if (hueDist < 40) {
+         const hw = Math.max(0, 1 - hueDist / 40);
+         let sw = 0;
+         if (s > 0.1 && s < 0.8) {
+             sw = Math.sin(((s - 0.1) / 0.7) * Math.PI);
+         }
+         let lw = 0;
+         if (hslL > 0.15 && hslL < 0.95) {
+             lw = Math.sin(((hslL - 0.15) / 0.8) * Math.PI);
+         }
+         skinWeight = hw * sw * lw * 0.9; // Max 90% protection for color
       }
-      if (highlightFactor !== 0) {
-        v = v + highlightFactor * Math.pow(v, 3) * (1 - v);
+      
+      if (skinWeight > 0) {
+          // Protect color heavily, but allow lightness to be driven by the tone curve
+          // This ensures the face gets properly exposed/contrasted while keeping its natural hue
+          newA = newA * (1 - skinWeight) + origA * skinWeight;
+          newB = newB * (1 - skinWeight) + origB * skinWeight;
+          // Only 20% protection on lightness to allow exposure matching
+          newL = newL * (1 - skinWeight * 0.2) + origL * (skinWeight * 0.2);
       }
-
-      return v * 255;
-    };
-    r = applyBasic(r);
-    g = applyBasic(g);
-    b = applyBasic(b);
-
-    // Clamp before saturation
-    r = Math.max(0, Math.min(255, r));
+      
+      // Blend based on intensity sliders
+      newL = origL * (1 - intensity) + newL * intensity;
+      newA = origA * (1 - satIntensity) + newA * satIntensity;
+      newB = origB * (1 - satIntensity) + newB * satIntensity;
+      
+      // Clamp LAB values
+      newL = Math.max(0, Math.min(100, newL));
+      newA = Math.max(-128, Math.min(127, newA));
+      newB = Math.max(-128, Math.min(127, newB));
+      
+      const [mr, mg, mb] = labToRgb(newL, newA, newB);
+      r = mr; g = mg; b = mb;
+    }
     g = Math.max(0, Math.min(255, g));
     b = Math.max(0, Math.min(255, b));
 
@@ -877,5 +1232,5 @@ export function processImageData(
     }
   }
 
-  return dstImageData;
+  return { data: dstImageData, srcStats: computedSrcStats };
 }

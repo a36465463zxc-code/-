@@ -7,13 +7,19 @@ import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
-import { FilmType, Adjustments, defaultAdjustments, ImageItem, LUT3D, HSLColor } from './types';
-import { calculateLevels, processImageData, calculateAutoWhiteBalance, calculateHistogram, rgbToHsl, getHslColorRange } from './utils/imageProcessing';
+import { FilmType, Adjustments, defaultAdjustments, ImageItem, LUT3D, HSLColor, LabStats } from './types';
+import { calculateLevels, processImageData, calculateAutoWhiteBalance, calculateHistogram, rgbToHsl, getHslColorRange, calculateLabStats, exportAsCubeLUT } from './utils/imageProcessing';
 import { parseCubeLUT } from './utils/lutParser';
 import { SliderControl } from './components/SliderControl';
 import { ImageItemCard } from './components/ImageItemCard';
 import { Histogram } from './components/Histogram';
 import { FILM_PRESETS } from './constants/presets';
+
+interface ColorReference {
+  id: string;
+  src: string;
+  stats: LabStats;
+}
 
 export default function App() {
   const [images, setImages] = useState<ImageItem[]>([]);
@@ -22,6 +28,15 @@ export default function App() {
   const [compareMode, setCompareMode] = useState<'none' | 'split'>('none');
   const [splitPosition, setSplitPosition] = useState(50);
   const [isCropping, setIsCropping] = useState(false);
+  
+  const [colorReferences, setColorReferences] = useState<ColorReference[]>([]);
+  const [selectedReferenceId, setSelectedReferenceId] = useState<string | null>(null);
+  
+  const activeRefStats = React.useMemo(() => {
+    if (!selectedReferenceId) return null;
+    const ref = colorReferences.find(r => r.id === selectedReferenceId);
+    return ref ? ref.stats : null;
+  }, [colorReferences, selectedReferenceId]);
   const [isColorMixPickerActive, setIsColorMixPickerActive] = useState(false);
   const colorMixDragRef = useRef<{
     active: boolean;
@@ -44,6 +59,7 @@ export default function App() {
   const [sectionsOpen, setSectionsOpen] = useState({
     lut: false,
     basic: false,
+    colorMatch: false,
     color: false,
     colorMix: false,
     colorBalance: false,
@@ -58,6 +74,7 @@ export default function App() {
   const sliderRef = useRef<HTMLDivElement>(null);
   const [originalImageData, setOriginalImageData] = useState<ImageData | null>(null);
   const [levels, setLevels] = useState<any>(null);
+  const [imageStats, setImageStats] = useState<LabStats | null>(null);
   const [histogramData, setHistogramData] = useState<{r: number[], g: number[], b: number[], l: number[]} | null>(null);
 
   const selectedImage = images.find(img => img.id === selectedId);
@@ -198,6 +215,81 @@ export default function App() {
     e.target.value = '';
   };
 
+  const handleColorMatchUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []) as File[];
+    if (files.length === 0) return;
+    
+    files.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const src = event.target?.result as string;
+        
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          // Downscale for performance
+          const maxDim = 512;
+          let w = img.width;
+          let h = img.height;
+          if (w > maxDim || h > maxDim) {
+            if (w > h) {
+              h = Math.round((h * maxDim) / w);
+              w = maxDim;
+            } else {
+              w = Math.round((w * maxDim) / h);
+              h = maxDim;
+            }
+          }
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, w, h);
+            const imageData = ctx.getImageData(0, 0, w, h);
+            const stats = calculateLabStats(imageData.data);
+            
+            const newRef: ColorReference = {
+              id: Math.random().toString(36).substring(2, 9),
+              src,
+              stats
+            };
+            
+            setColorReferences(prev => {
+              const updated = [...prev, newRef];
+              if (updated.length === 1) {
+                setTimeout(() => {
+                  setSelectedReferenceId(newRef.id);
+                  updateAdjustments({ colorMatchEnabled: true });
+                }, 0);
+              }
+              return updated;
+            });
+          }
+        };
+        img.src = src;
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = '';
+  };
+
+  const handleExportLUT = () => {
+    if (!activeRefStats || !imageStats) {
+      alert("Need both source image and reference image to export LUT.");
+      return;
+    }
+    const lutString = exportAsCubeLUT(33, adjustments, levels, activeRefStats, imageStats);
+    const blob = new Blob([lutString], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'color_match.cube';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const handleLutUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -278,13 +370,23 @@ export default function App() {
       ? { ...defaultAdjustments, filmType: adjustments.filmType, autoMask: adjustments.autoMask }
       : adjustments;
 
-    const processedData = processImageData(
+    const { data: processedData, srcStats: newSrcStats } = processImageData(
       originalImageData.data,
       originalImageData.width,
       originalImageData.height,
       currentAdjustments,
-      levels
+      levels,
+      activeRefStats
     );
+
+    if (newSrcStats) {
+      setImageStats(prev => {
+        if (!prev || prev.lMean !== newSrcStats.lMean) {
+          return newSrcStats;
+        }
+        return prev;
+      });
+    }
 
     let originalProcessedData: ImageData | null = null;
     if (compareMode === 'split' && !isComparing) {
@@ -293,8 +395,9 @@ export default function App() {
         originalImageData.width,
         originalImageData.height,
         { ...defaultAdjustments, filmType: adjustments.filmType, autoMask: adjustments.autoMask },
-        levels
-      );
+        levels,
+        activeRefStats
+      ).data;
     }
 
     // 2. Handle Rotation and Cropping
@@ -374,7 +477,7 @@ export default function App() {
       const currentData = ctx.getImageData(0, 0, canvasRef.current.width, canvasRef.current.height);
       setHistogramData(calculateHistogram(currentData));
     }
-  }, [originalImageData, adjustments, levels, isComparing, compareMode, isCropping, selectedImage?.crop]);
+  }, [originalImageData, adjustments, levels, isComparing, compareMode, isCropping, selectedImage?.crop, activeRefStats]);
 
   const getCroppedCanvas = (canvas: HTMLCanvasElement, crop: Crop) => {
     if (!crop || crop.width === 0 || crop.height === 0) return canvas;
@@ -486,8 +589,9 @@ export default function App() {
       width,
       height,
       imgItem.adjustments,
-      imgLevels
-    );
+      imgLevels,
+      activeRefStats
+    ).data;
     
     const rotation = imgItem.adjustments.rotation;
     const isRotated90 = rotation === 90 || rotation === 270;
@@ -926,6 +1030,28 @@ export default function App() {
                   </div>
                 </div>
               )}
+              
+              {adjustments.colorMatchEnabled && selectedReferenceId && (
+                <div className="absolute top-4 left-4 z-40 w-32 h-32 md:w-48 md:h-48 bg-zinc-900/80 backdrop-blur-md border border-zinc-700/50 rounded-xl shadow-2xl overflow-hidden flex flex-col">
+                  <div className="px-3 py-1.5 bg-zinc-900/90 border-b border-zinc-800 flex items-center justify-between shrink-0">
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Reference</span>
+                    <button 
+                      onClick={() => updateAdjustments({ colorMatchEnabled: false })}
+                      className="text-zinc-500 hover:text-red-400 transition-colors"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                  <div className="flex-1 p-2 flex items-center justify-center overflow-hidden">
+                    <img 
+                      src={colorReferences.find(r => r.id === selectedReferenceId)?.src} 
+                      alt="Reference" 
+                      className="max-w-full max-h-full object-contain rounded-md shadow-inner"
+                    />
+                  </div>
+                </div>
+              )}
+
               <TransformComponent 
                 wrapperStyle={{ width: '100%', height: '100%', maxWidth: '100%', maxHeight: '100%' }}
                 contentStyle={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 0, minWidth: 0 }}
@@ -937,7 +1063,7 @@ export default function App() {
                       <p className="text-sm mt-2 opacity-60">You can also drag and drop images here</p>
                     </div>
                   ) : (
-                    <div className="w-full h-full p-4 md:p-8 flex items-center justify-center overflow-hidden">
+                    <div className="w-full h-full p-4 md:p-8 flex items-center justify-center overflow-hidden relative">
                       <div 
                         className="relative shadow-2xl rounded-sm"
                         style={{ 
@@ -1198,29 +1324,166 @@ export default function App() {
                 </div>
               )}
             </div>
-
-            {adjustments.filmType !== 'positive' && (
-              <div className="flex items-center justify-between pt-2 border-t border-zinc-800/50">
-                <label className="text-sm font-medium text-zinc-300">Auto Remove Mask</label>
-                <button
-                  onClick={() => updateAdjustments({ autoMask: !adjustments.autoMask })}
-                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                    adjustments.autoMask ? 'bg-indigo-600' : 'bg-zinc-700'
-                  }`}
-                >
-                  <span
-                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                      adjustments.autoMask ? 'translate-x-6' : 'translate-x-1'
-                    }`}
-                  />
-                </button>
-              </div>
-            )}
           </div>
 
           <div className="border-t border-zinc-800/50 pt-6 space-y-4">
-            {/* LUT Section */}
+            {/* Color Match Section */}
             <div className="space-y-4">
+              <button 
+                onClick={() => setSectionsOpen(prev => ({ ...prev, colorMatch: !prev.colorMatch }))}
+                className="w-full flex items-center justify-between group"
+              >
+                <div className="flex items-center gap-2">
+                  <Palette className="w-4 h-4 text-pink-400" />
+                  <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider group-hover:text-pink-400 transition-colors">
+                    Color Match
+                  </h3>
+                </div>
+                {sectionsOpen.colorMatch ? <ChevronUp className="w-3 h-3 text-zinc-600" /> : <ChevronDown className="w-3 h-3 text-zinc-600" />}
+              </button>
+
+              {sectionsOpen.colorMatch && (
+                <div className="space-y-6 animate-in fade-in slide-in-from-top-1 duration-200">
+                  {colorReferences.length === 0 ? (
+                    <label className="flex items-center justify-center gap-2 w-full py-3 px-4 border-2 border-dashed border-zinc-700 hover:border-pink-500 bg-zinc-800/50 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-300 rounded-lg transition-colors cursor-pointer">
+                      <Upload className="w-4 h-4" />
+                      <span className="text-xs font-medium">Upload Reference Images</span>
+                      <input type="file" accept="image/*" multiple className="hidden" onChange={handleColorMatchUpload} />
+                    </label>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-zinc-400">References ({colorReferences.length})</span>
+                        <div className="flex items-center gap-2">
+                          <button 
+                            onClick={handleExportLUT}
+                            className="text-xs flex items-center gap-1 bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 px-2 py-1 rounded transition-colors"
+                          >
+                            <Download className="w-3 h-3" />
+                            Export LUT
+                          </button>
+                          <label className="text-xs flex items-center gap-1 bg-zinc-700/50 text-zinc-300 hover:bg-zinc-700 px-2 py-1 rounded transition-colors cursor-pointer">
+                            <Upload className="w-3 h-3" />
+                            Add
+                            <input type="file" accept="image/*" multiple className="hidden" onChange={handleColorMatchUpload} />
+                          </label>
+                        </div>
+                      </div>
+                      
+                      <div className="grid grid-cols-3 gap-2">
+                        {colorReferences.map(ref => (
+                          <div 
+                            key={ref.id} 
+                            className={`relative rounded overflow-hidden border-2 cursor-pointer transition-colors ${selectedReferenceId === ref.id ? 'border-pink-500' : 'border-transparent hover:border-white/20'}`}
+                            onClick={() => setSelectedReferenceId(ref.id)}
+                          >
+                            <img src={ref.src} alt="Reference" className="w-full h-16 object-cover" />
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setColorReferences(prev => {
+                                  const updated = prev.filter(r => r.id !== ref.id);
+                                  if (selectedReferenceId === ref.id) {
+                                    setTimeout(() => {
+                                      setSelectedReferenceId(updated.length > 0 ? updated[0].id : null);
+                                      if (updated.length === 0) {
+                                        updateAdjustments({ colorMatchEnabled: false });
+                                      }
+                                    }, 0);
+                                  }
+                                  return updated;
+                                });
+                              }}
+                              className="absolute top-1 right-1 p-0.5 bg-black/50 hover:bg-black/70 rounded-full text-white transition-colors"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex items-center justify-between pt-2">
+                        <label className="text-sm font-medium text-zinc-300">Enable Color Match</label>
+                        <button
+                          onClick={() => updateAdjustments({ colorMatchEnabled: !adjustments.colorMatchEnabled })}
+                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                            adjustments.colorMatchEnabled ? 'bg-pink-600' : 'bg-zinc-700'
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                              adjustments.colorMatchEnabled ? 'translate-x-6' : 'translate-x-1'
+                            }`}
+                          />
+                        </button>
+                      </div>
+                      {adjustments.colorMatchEnabled && (
+                        <>
+                          <SliderControl 
+                            label="Match Intensity" 
+                            icon={<Palette className="w-4 h-4 text-pink-400" />} 
+                            value={adjustments.colorMatchIntensity} 
+                            min={0} max={100} 
+                            onChange={(v) => updateAdjustments({ colorMatchIntensity: v })} 
+                          />
+                          <SliderControl 
+                            label="Match Saturation" 
+                            icon={<Droplet className="w-4 h-4 text-pink-400" />} 
+                            value={adjustments.colorMatchSaturation} 
+                            min={0} max={100} 
+                            onChange={(v) => updateAdjustments({ colorMatchSaturation: v })} 
+                          />
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Halation Section */}
+            <div className="pt-6 border-t border-zinc-800/50 space-y-4">
+              <button 
+                onClick={() => setSectionsOpen(prev => ({ ...prev, halation: !prev.halation }))}
+                className="w-full flex items-center justify-between group"
+              >
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-3 h-3 text-red-400/50" />
+                  <p className="text-xs font-bold text-zinc-500 group-hover:text-zinc-300 uppercase tracking-widest transition-colors">Halation</p>
+                </div>
+                {sectionsOpen.halation ? <ChevronUp className="w-3 h-3 text-zinc-600" /> : <ChevronDown className="w-3 h-3 text-zinc-600" />}
+              </button>
+
+              {sectionsOpen.halation && (
+                <div className="space-y-6 animate-in fade-in slide-in-from-top-1 duration-200">
+              <SliderControl 
+                label="Intensity" 
+                icon={<Sun className="w-4 h-4 text-red-500" />} 
+                value={adjustments.halationIntensity} 
+                min={0} max={100} 
+                onChange={(v) => updateAdjustments({ halationIntensity: v })} 
+              />
+              <SliderControl 
+                label="Radius" 
+                icon={<Maximize2 className="w-4 h-4 text-zinc-400" />} 
+                value={adjustments.halationRadius} 
+                min={1} max={100} 
+                defaultValue={10}
+                onChange={(v) => updateAdjustments({ halationRadius: v })} 
+              />
+              <SliderControl 
+                label="Threshold" 
+                icon={<Minimize2 className="w-4 h-4 text-zinc-400" />} 
+                value={adjustments.halationThreshold} 
+                min={0} max={255} 
+                defaultValue={220}
+                onChange={(v) => updateAdjustments({ halationThreshold: v })} 
+              />
+                </div>
+              )}
+            </div>
+
+            {/* LUT Section */}
+            <div className="pt-6 border-t border-zinc-800/50 space-y-4">
               <button 
                 onClick={() => setSectionsOpen(prev => ({ ...prev, lut: !prev.lut }))}
                 className="w-full flex items-center justify-between group"
@@ -1555,47 +1818,7 @@ export default function App() {
                 )}
               </div>
 
-              {/* Halation Section */}
-              <div className="pt-6 border-t border-zinc-800/50 space-y-4">
-                <button 
-                  onClick={() => setSectionsOpen(prev => ({ ...prev, halation: !prev.halation }))}
-                  className="w-full flex items-center justify-between group"
-                >
-                  <div className="flex items-center gap-2">
-                    <p className="text-xs font-bold text-zinc-500 group-hover:text-zinc-300 uppercase tracking-widest transition-colors">Halation</p>
-                    <Sparkles className="w-3 h-3 text-red-400/50" />
-                  </div>
-                  {sectionsOpen.halation ? <ChevronUp className="w-3 h-3 text-zinc-600" /> : <ChevronDown className="w-3 h-3 text-zinc-600" />}
-                </button>
 
-                {sectionsOpen.halation && (
-                  <div className="space-y-6 animate-in fade-in slide-in-from-top-1 duration-200">
-                <SliderControl 
-                  label="Intensity" 
-                  icon={<Sun className="w-4 h-4 text-red-500" />} 
-                  value={adjustments.halationIntensity} 
-                  min={0} max={100} 
-                  onChange={(v) => updateAdjustments({ halationIntensity: v })} 
-                />
-                <SliderControl 
-                  label="Radius" 
-                  icon={<Maximize2 className="w-4 h-4 text-zinc-400" />} 
-                  value={adjustments.halationRadius} 
-                  min={1} max={100} 
-                  defaultValue={10}
-                  onChange={(v) => updateAdjustments({ halationRadius: v })} 
-                />
-                <SliderControl 
-                  label="Threshold" 
-                  icon={<Minimize2 className="w-4 h-4 text-zinc-400" />} 
-                  value={adjustments.halationThreshold} 
-                  min={0} max={255} 
-                  defaultValue={220}
-                  onChange={(v) => updateAdjustments({ halationThreshold: v })} 
-                />
-                  </div>
-                )}
-              </div>
             </div>
           </div>
         </div>
